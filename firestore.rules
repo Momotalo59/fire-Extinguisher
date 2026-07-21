@@ -1,0 +1,29 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    // Allow public read and write for the extinguishers collection
+    match /extinguishers/{extinguisherId} {
+      allow read, write: if true;
+    }
+
+    // Allow public read and write for the fireExtinguishers collection
+    match /fireExtinguishers/{extinguisherId} {
+      allow read, write: if true;
+    }
+
+    // Allow public read and write for the inspections collection
+    match /inspections/{inspectionId} {
+      allow read, write: if true;
+    }
+
+    // Allow public read and write for the users collection
+    match /users/{userId} {
+      allow read, write: if true;
+    }
+
+    // Allow public read and write for the systemLogs collection
+    match /systemLogs/{logId} {
+      allow read, write: if true;
+    }
+  }
+}

@@ -1,0 +1,37 @@
+{
+  "indexes": [
+    {
+      "collectionGroup": "fireExtinguishers",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "building", "order": "ASCENDING" },
+        { "fieldPath": "status", "order": "ASCENDING" }
+      ]
+    },
+    {
+      "collectionGroup": "fireExtinguishers",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "status", "order": "ASCENDING" },
+        { "fieldPath": "expiryDate", "order": "ASCENDING" }
+      ]
+    },
+    {
+      "collectionGroup": "inspections",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "feId", "order": "ASCENDING" },
+        { "fieldPath": "inspectionDate", "order": "DESCENDING" }
+      ]
+    },
+    {
+      "collectionGroup": "inspections",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "inspectionDate", "order": "DESCENDING" },
+        { "fieldPath": "inspectionResult", "order": "ASCENDING" }
+      ]
+    }
+  ],
+  "fieldOverrides": []
+}

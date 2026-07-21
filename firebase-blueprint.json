@@ -1,0 +1,141 @@
+{
+  "entities": {
+    "FireExtinguisher": {
+      "title": "FireExtinguisher",
+      "description": "Represents a fire extinguisher asset in the facility",
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "description": "The unique serial/ID of the extinguisher"
+        },
+        "type": {
+          "type": "string",
+          "enum": ["CO2", "Dry Powder", "Foam", "Water", "Wet Chemical", "Clean Agent"],
+          "description": "Type of extinguishing agent"
+        },
+        "size": {
+          "type": "string",
+          "description": "Weight or volume size"
+        },
+        "location": {
+          "type": "string",
+          "description": "Where it is installed"
+        },
+        "installedDate": {
+          "type": "string",
+          "description": "Installation date"
+        },
+        "expiryDate": {
+          "type": "string",
+          "description": "Expiration date"
+        },
+        "lastInspectedDate": {
+          "type": "string",
+          "description": "Most recent inspection date"
+        },
+        "status": {
+          "type": "string",
+          "enum": ["Good", "Needs Attention", "Critical", "Not Inspected"],
+          "description": "Overall status of the extinguisher"
+        },
+        "qrCode": {
+          "type": "string",
+          "description": "Value printed on QR label"
+        },
+        "notes": {
+          "type": "string",
+          "description": "Any additional descriptive notes"
+        },
+        "createdAt": {
+          "type": "string",
+          "description": "Database insertion timestamp"
+        }
+      },
+      "required": ["id", "type", "size", "location", "installedDate", "expiryDate", "status", "qrCode"]
+    },
+    "InspectionLog": {
+      "title": "InspectionLog",
+      "description": "Represents a safety inspection log entry",
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "description": "Unique identifier of the inspection record"
+        },
+        "extinguisherId": {
+          "type": "string",
+          "description": "ID of the inspected fire extinguisher"
+        },
+        "inspectorName": {
+          "type": "string",
+          "description": "Name of the inspector who performed the check"
+        },
+        "inspectionDate": {
+          "type": "string",
+          "description": "ISO timestamp of the inspection"
+        },
+        "pressureGauge": {
+          "type": "string",
+          "enum": ["Good (Green)", "Low (Red/Yellow)", "High (Red)", "Not Applicable"],
+          "description": "Pressure gauge inspection status"
+        },
+        "physicalBody": {
+          "type": "string",
+          "enum": ["Good", "Damaged/Rusted"],
+          "description": "External container shell status"
+        },
+        "safetyPin": {
+          "type": "string",
+          "enum": ["Intact", "Missing/Broken"],
+          "description": "Safety pin and plastic tamper seal status"
+        },
+        "nozzleHose": {
+          "type": "string",
+          "enum": ["Clean & Intact", "Blocked/Cracked"],
+          "description": "Hose and discharge nozzle status"
+        },
+        "weightStatus": {
+          "type": "string",
+          "enum": ["Full", "Low", "Empty"],
+          "description": "Weight or fullness check status"
+        },
+        "overallResult": {
+          "type": "string",
+          "enum": ["Pass", "Fail"],
+          "description": "Pass or Fail status of the inspection"
+        },
+        "remarks": {
+          "type": "string",
+          "description": "Optional notes or comments"
+        }
+      },
+      "required": [
+        "id",
+        "extinguisherId",
+        "inspectorName",
+        "inspectionDate",
+        "pressureGauge",
+        "physicalBody",
+        "safetyPin",
+        "nozzleHose",
+        "weightStatus",
+        "overallResult"
+      ]
+    }
+  },
+  "firestore": {
+    "/extinguishers/{extinguisherId}": {
+      "schema": "FireExtinguisher",
+      "description": "Collection of fire extinguishers"
+    },
+    "/fireExtinguishers/{extinguisherId}": {
+      "schema": "FireExtinguisher",
+      "description": "Collection of fire extinguishers"
+    },
+    "/inspections/{inspectionId}": {
+      "schema": "InspectionLog",
+      "description": "Collection of inspection logs"
+    }
+  }
+}
