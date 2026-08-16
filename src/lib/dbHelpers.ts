@@ -15,7 +15,7 @@ import {
 } from "firebase/firestore";
 import { db } from "./firebase";
 import { uploadExtinguisherProfilePhoto, uploadInspectionPhotosAndSignature } from "./storageHelpers";
-import { FireExtinguisher, InspectionLog, ExtinguisherType, UserProfile, SystemLog } from "../types";
+import { FireExtinguisher, InspectionLog, ExtinguisherType, UserProfile, SystemLog, AssetType } from "../types";
 
 const EXTINGUISHERS_COLLECTION = "fireExtinguishers";
 const INSPECTIONS_COLLECTION = "inspections";
@@ -44,8 +44,21 @@ interface FirestoreErrorInfo {
 }
 
 export function handleFirestoreError(error: unknown, operationType: OperationType, path: string | null): never {
+  const errMsg = error instanceof Error ? error.message : String(error);
+  
+  // If this is a custom application error (like "รหัสถัง...มีอยู่แล้ว"), re-throw as is
+  if (error instanceof Error && !errMsg.includes('FirebaseError') && !errMsg.includes('permission') && !errMsg.includes('unavailable')) {
+    throw error;
+  }
+
+  // Handle network / connection offline gracefully
+  if (errMsg.includes('unavailable') || errMsg.includes('Could not reach Cloud Firestore backend') || errMsg.includes('client is offline')) {
+    console.warn(`[Firestore Offline/Network Warning] Operation ${operationType} on ${path}:`, errMsg);
+    throw new Error('ไม่สามารถเชื่อมต่อฐานข้อมูลได้ชั่วคราว หรือสัญญาณอินเทอร์เน็ตขัดข้อง ระบบจะสลับไปใช้โหมดแคชออฟไลน์');
+  }
+
   const errInfo: FirestoreErrorInfo = {
-    error: error instanceof Error ? error.message : String(error),
+    error: errMsg,
     authInfo: {
       userId: null,
       email: null,
@@ -87,10 +100,28 @@ function mapFromFirestore(data: any): any {
   return result;
 }
 
-// Map to Firestore (convert ISO strings to Timestamps, and GPS objects to GeoPoints)
+// Map to Firestore (convert ISO strings to Timestamps, GPS objects to GeoPoints, and sanitize undefined values)
 function mapToFirestore(data: any): any {
-  if (!data) return data;
-  const result = { ...data };
+  if (!data || typeof data !== 'object') return data;
+  if (data instanceof Timestamp || data instanceof GeoPoint || data instanceof Date) return data;
+  if (Array.isArray(data)) {
+    return data
+      .filter(item => item !== undefined)
+      .map(item => (typeof item === 'object' && item !== null ? mapToFirestore(item) : item));
+  }
+
+  const result: any = {};
+  
+  for (const [key, val] of Object.entries(data)) {
+    if (val === undefined) {
+      continue; // Skip undefined keys completely so Firestore never rejects them
+    }
+    if (val !== null && typeof val === 'object' && !(val instanceof Timestamp) && !(val instanceof GeoPoint) && !(val instanceof Date)) {
+      result[key] = mapToFirestore(val);
+    } else {
+      result[key] = val;
+    }
+  }
   
   const timestampFields = ['installationDate', 'expiryDate', 'lastInspectedAt', 'createdAt', 'inspectionDate', 'timestamp', 'lastLogin'];
   for (const field of timestampFields) {
@@ -117,6 +148,7 @@ function mapToFirestore(data: any): any {
 const sampleExtinguishers: FireExtinguisher[] = [
   {
     id: "FE-001",
+    assetType: "ถังดับเพลิง",
     qrCode: "FE-001",
     serialNumber: "SN-20260718-A",
     type: "Dry Chemical",
@@ -134,6 +166,7 @@ const sampleExtinguishers: FireExtinguisher[] = [
   },
   {
     id: "FE-002",
+    assetType: "ถังดับเพลิง",
     qrCode: "FE-002",
     serialNumber: "SN-20260718-B",
     type: "CO2",
@@ -150,55 +183,40 @@ const sampleExtinguishers: FireExtinguisher[] = [
     createdAt: "2024-02-10T00:00:00.000Z"
   },
   {
-    id: "FE-003",
-    qrCode: "FE-003",
-    serialNumber: "SN-20260718-C",
-    type: "Clean Agent",
-    size: "10 lbs",
-    building: "อาคารต้นแก้ว",
-    floor: "ชั้น GF",
-    locationDetails: "ห้องควบคุมระบบไฟฟ้า",
-    locationGPS: { latitude: 19.9073, longitude: 99.8291 },
-    installationDate: "2024-05-20T00:00:00.000Z",
-    expiryDate: "2029-05-20T00:00:00.000Z",
+    id: "FHC-001",
+    assetType: "ตู้ดับเพลิง",
+    qrCode: "FHC-001",
+    serialNumber: "SN-FHC-101",
+    type: "ตู้สายน้ำดับเพลิง (Hose Cabinet)",
+    size: "ตู้มาตรฐาน 1.5 นิ้ว x 100 ฟุต",
+    building: "อาคารหมอบริกส์",
+    floor: "ชั้น 1",
+    locationDetails: "ทางเดินโถงกลางข้างบันไดหนีไฟ",
+    locationGPS: { latitude: 19.9077, longitude: 99.8296 },
+    installationDate: "2024-01-10T00:00:00.000Z",
+    expiryDate: "2029-01-10T00:00:00.000Z",
+    status: "ปกติ",
+    photoUrl: "https://images.unsplash.com/photo-1595152772835-219674b2a8a6?auto=format&fit=crop&w=400&q=85",
+    lastInspectedAt: "2026-06-15T09:00:00.000Z",
+    createdAt: "2024-01-10T00:00:00.000Z"
+  },
+  {
+    id: "FD-001",
+    assetType: "ประตูกันไฟ",
+    qrCode: "FD-001",
+    serialNumber: "SN-FD-201",
+    type: "ประตูกันไฟเหล็ก",
+    size: "มาตรฐาน 1.0 x 2.1 เมตร (ทนไฟ 2 ชม.)",
+    building: "อาคารหมอบริกส์",
+    floor: "ชั้น 1",
+    locationDetails: "ประตูออกทางหนีไฟทิศตะวันออก",
+    locationGPS: { latitude: 19.9079, longitude: 99.8297 },
+    installationDate: "2024-01-05T00:00:00.000Z",
+    expiryDate: "2034-01-05T00:00:00.000Z",
     status: "ปกติ",
     photoUrl: null,
-    lastInspectedAt: null,
-    createdAt: "2024-05-20T00:00:00.000Z"
-  },
-  {
-    id: "FE-004",
-    qrCode: "FE-004",
-    serialNumber: "SN-20260718-D",
-    type: "Dry Chemical",
-    size: "15 lbs",
-    building: "อาคารต้นแก้ว",
-    floor: "ชั้น 3",
-    locationDetails: "หน้าแผนกกายภาพบำบัด",
-    locationGPS: { latitude: 19.9078, longitude: 99.8298 },
-    installationDate: "2023-11-05T00:00:00.000Z",
-    expiryDate: "2028-11-05T00:00:00.000Z",
-    status: "แรงดันต่ำ",
-    photoUrl: null,
-    lastInspectedAt: "2026-05-02T14:45:00.000Z",
-    createdAt: "2023-11-05T00:00:00.000Z"
-  },
-  {
-    id: "FE-005",
-    qrCode: "FE-005",
-    serialNumber: "SN-20260718-E",
-    type: "Foam",
-    size: "9.0 L",
-    building: "อาคารจอดรถ",
-    floor: "ชั้น 1",
-    locationDetails: "ทางขึ้นบันไดหนีไฟหลัก",
-    locationGPS: { latitude: 19.9080, longitude: 99.8300 },
-    installationDate: "2023-08-12T00:00:00.000Z",
-    expiryDate: "2028-08-12T00:00:00.000Z",
-    status: "ชำรุด",
-    photoUrl: null,
-    lastInspectedAt: "2026-04-15T09:00:00.000Z",
-    createdAt: "2023-08-12T00:00:00.000Z"
+    lastInspectedAt: "2026-06-16T14:20:00.000Z",
+    createdAt: "2024-01-05T00:00:00.000Z"
   }
 ];
 
@@ -208,13 +226,84 @@ export async function seedDatabaseIfEmpty() {
   console.log("Seeding disabled to reference actual user database only.");
 }
 
-// Fetch all fire extinguishers
+// Helper to sanitize document IDs containing slashes for Firestore path safety
+export function encodeDocId(id: string): string {
+  if (!id) return id;
+  return encodeURIComponent(id).replace(/\./g, '%2E');
+}
+
+export function decodeDocId(docId: string): string {
+  if (!docId) return docId;
+  try {
+    return decodeURIComponent(docId);
+  } catch (e) {
+    return docId;
+  }
+}
+
+// Check if inspected today (for daily inspection items like Fire Alarm Control Panel - FCP)
+export function isInspectedToday(lastInspectedAt?: string | null): boolean {
+  if (!lastInspectedAt) return false;
+  const inspectedDate = new Date(lastInspectedAt);
+  if (isNaN(inspectedDate.getTime())) return false;
+  const now = new Date();
+  return (
+    inspectedDate.getFullYear() === now.getFullYear() &&
+    inspectedDate.getMonth() === now.getMonth() &&
+    inspectedDate.getDate() === now.getDate()
+  );
+}
+
+// Check if a fire extinguisher / asset was already inspected in its required inspection cycle
+// (Daily for FCP, Monthly for Fire Extinguishers, Hose Cabinets, Fire Doors)
+export function isInspectedInCurrentMonth(lastInspectedAt?: string | null, assetType?: AssetType | string): boolean {
+  if (!lastInspectedAt) return false;
+  const inspectedDate = new Date(lastInspectedAt);
+  if (isNaN(inspectedDate.getTime())) return false;
+  const now = new Date();
+  
+  // If asset is Fire Alarm Control Panel (FCP), inspection is Daily
+  if (assetType === 'ตู้แจ้งเหตุเพลิงไหม้') {
+    return (
+      inspectedDate.getFullYear() === now.getFullYear() &&
+      inspectedDate.getMonth() === now.getMonth() &&
+      inspectedDate.getDate() === now.getDate()
+    );
+  }
+
+  return (
+    inspectedDate.getFullYear() === now.getFullYear() &&
+    inspectedDate.getMonth() === now.getMonth()
+  );
+}
+
+export function isAssetAlreadyInspected(ext: FireExtinguisher): boolean {
+  return isInspectedInCurrentMonth(ext.lastInspectedAt, ext.assetType || inferAssetType(ext));
+}
+
+export function inferAssetType(data: any): AssetType {
+  if (data && data.assetType) return data.assetType as AssetType;
+  const idUpper = (data?.id || '').toUpperCase();
+  const typeStr = (data?.type || '');
+  if (idUpper.startsWith('EM-') || idUpper.startsWith('EL-') || typeStr.includes('ไฟฉุกเฉิน') || typeStr.includes('Emergency Light')) return 'ไฟฉุกเฉิน';
+  if (idUpper.startsWith('EX-') || idUpper.startsWith('EXIT-') || idUpper.startsWith('ES-') || typeStr.includes('ป้ายบอกทางหนีไฟ') || typeStr.includes('ป้ายหนีไฟ') || typeStr.includes('Exit Sign')) return 'ป้ายบอกทางหนีไฟ';
+  if (idUpper.startsWith('FCP-') || idUpper.startsWith('FA-') || typeStr.includes('FCP') || typeStr.includes('แจ้งเหตุ') || typeStr.includes('Fire Alarm')) return 'ตู้แจ้งเหตุเพลิงไหม้';
+  if (idUpper.startsWith('FHC-') || typeStr.includes('ตู้') || typeStr.includes('Hose')) return 'ตู้ดับเพลิง';
+  if (idUpper.startsWith('FD-') || typeStr.includes('ประตู')) return 'ประตูกันไฟ';
+  return 'ถังดับเพลิง';
+}
+
+// Fetch all fire extinguishers / safety assets
 export async function getExtinguishers(): Promise<FireExtinguisher[]> {
   try {
     const querySnapshot = await getDocs(collection(db, EXTINGUISHERS_COLLECTION));
     const items: FireExtinguisher[] = [];
     querySnapshot.forEach((docSnap) => {
-      items.push(mapFromFirestore({ id: docSnap.id, ...docSnap.data() }) as FireExtinguisher);
+      const data = docSnap.data();
+      const id = data.id || decodeDocId(docSnap.id);
+      const mapped = mapFromFirestore({ ...data, id }) as FireExtinguisher;
+      mapped.assetType = inferAssetType(mapped);
+      items.push(mapped);
     });
     // Sort by id naturally
     return items.sort((a, b) => a.id.localeCompare(b.id, undefined, { numeric: true, sensitivity: 'base' }));
@@ -226,7 +315,8 @@ export async function getExtinguishers(): Promise<FireExtinguisher[]> {
 // Add a new fire extinguisher
 export async function addExtinguisher(extinguisher: Omit<FireExtinguisher, 'createdAt'>): Promise<void> {
   try {
-    const feDocRef = doc(db, EXTINGUISHERS_COLLECTION, extinguisher.id);
+    const docId = encodeDocId(extinguisher.id);
+    const feDocRef = doc(db, EXTINGUISHERS_COLLECTION, docId);
     
     // Check if ID already exists
     const docSnap = await getDoc(feDocRef);
@@ -245,14 +335,15 @@ export async function addExtinguisher(extinguisher: Omit<FireExtinguisher, 'crea
 
     await setDoc(feDocRef, mapToFirestore(fullFe));
   } catch (error) {
-    handleFirestoreError(error, OperationType.CREATE, `${EXTINGUISHERS_COLLECTION}/${extinguisher.id}`);
+    handleFirestoreError(error, OperationType.CREATE, `${EXTINGUISHERS_COLLECTION}/${encodeDocId(extinguisher.id)}`);
   }
 }
 
 // Update a fire extinguisher
 export async function updateExtinguisher(extinguisher: FireExtinguisher): Promise<void> {
   try {
-    const feDocRef = doc(db, EXTINGUISHERS_COLLECTION, extinguisher.id);
+    const docId = encodeDocId(extinguisher.id);
+    const feDocRef = doc(db, EXTINGUISHERS_COLLECTION, docId);
 
     // Upload/Update profile photo to storage if present
     const uploadedPhotoUrl = await uploadExtinguisherProfilePhoto(extinguisher.id, extinguisher.photoUrl || "");
@@ -264,14 +355,15 @@ export async function updateExtinguisher(extinguisher: FireExtinguisher): Promis
 
     await setDoc(feDocRef, mapToFirestore(updatedExtinguisher), { merge: true });
   } catch (error) {
-    handleFirestoreError(error, OperationType.UPDATE, `${EXTINGUISHERS_COLLECTION}/${extinguisher.id}`);
+    handleFirestoreError(error, OperationType.UPDATE, `${EXTINGUISHERS_COLLECTION}/${encodeDocId(extinguisher.id)}`);
   }
 }
 
 // Delete a fire extinguisher
 export async function deleteExtinguisher(id: string): Promise<void> {
   try {
-    await deleteDoc(doc(db, EXTINGUISHERS_COLLECTION, id));
+    const docId = encodeDocId(id);
+    await deleteDoc(doc(db, EXTINGUISHERS_COLLECTION, docId));
     
     // Also try to delete its inspections
     const q = query(collection(db, INSPECTIONS_COLLECTION), where("feId", "==", id));
@@ -283,7 +375,7 @@ export async function deleteExtinguisher(id: string): Promise<void> {
     });
     await batch.commit();
   } catch (error) {
-    handleFirestoreError(error, OperationType.DELETE, `${EXTINGUISHERS_COLLECTION}/${id}`);
+    handleFirestoreError(error, OperationType.DELETE, `${EXTINGUISHERS_COLLECTION}/${encodeDocId(id)}`);
   }
 }
 
@@ -315,26 +407,30 @@ export async function addInspectionLog(log: Omit<InspectionLog, 'inspectionId'>)
     // Save log
     await setDoc(logRef, mapToFirestore(fullLog));
 
-    // Calculate new status for the extinguisher based on the checklist
+    // Calculate new status for the extinguisher / asset based on the checklist
     let newStatus: FireExtinguisher['status'] = 'ปกติ';
     
-    const isPass = 
-      fullLog.checklist.pressure === 'ปกติ' &&
-      fullLog.checklist.safetyPin === 'ปกติ' &&
-      fullLog.checklist.hoseNozzle === 'ปกติ' &&
-      fullLog.checklist.bodyCondition === 'ปกติ' &&
-      fullLog.checklist.instructionLabel === 'ปกติ' &&
-      fullLog.checklist.accessibility === 'ปกติ' &&
-      fullLog.checklist.weightStatus === 'ปกติ';
+    const checklistValues = Object.values(fullLog.checklist);
+    const hasFailItem = checklistValues.some(val => 
+      val === 'ชำรุด' || 
+      val === 'ต่ำ' || 
+      val === 'มีสิ่งกีดขวาง' || 
+      val === 'ไม่ปกติ' || 
+      val === 'มี Trouble' || 
+      val === 'มี Disable' || 
+      val === 'ไม่ครบ' ||
+      val === 'พร่อง'
+    );
 
-    if (!isPass || fullLog.inspectionResult === 'ไม่ผ่าน') {
+    if (hasFailItem || fullLog.inspectionResult === 'ไม่ผ่าน') {
       newStatus = 'ชำรุด';
     } else {
       newStatus = 'ปกติ';
     }
 
     // Update Extinguisher's fields
-    const feDocRef = doc(db, EXTINGUISHERS_COLLECTION, log.feId);
+    const feDocId = encodeDocId(log.feId);
+    const feDocRef = doc(db, EXTINGUISHERS_COLLECTION, feDocId);
     await updateDoc(feDocRef, mapToFirestore({
       lastInspectedAt: log.inspectionDate,
       status: newStatus
@@ -381,5 +477,34 @@ export async function addSystemLog(action: string, details: string, userEmail: s
     }));
   } catch (error) {
     console.error("Error writing system log:", error);
+  }
+}
+
+// Fetch all registered user profiles (for Admin user management)
+export async function getAllUserProfiles(): Promise<UserProfile[]> {
+  try {
+    const usersRef = collection(db, USERS_COLLECTION);
+    const querySnapshot = await getDocs(usersRef);
+    const users: UserProfile[] = [];
+    querySnapshot.forEach((docSnap) => {
+      const data = docSnap.data();
+      users.push(mapFromFirestore({ ...data, uid: data.uid || docSnap.id }) as UserProfile);
+    });
+    return users.sort((a, b) => (a.fullName || '').localeCompare(b.fullName || '', 'th'));
+  } catch (error) {
+    handleFirestoreError(error, OperationType.LIST, USERS_COLLECTION);
+  }
+}
+
+// Update a user's role (Admin only)
+export async function updateUserRole(uid: string, newRole: 'Admin' | 'Inspector', updatedByEmail: string): Promise<void> {
+  try {
+    const userDocRef = doc(db, USERS_COLLECTION, uid);
+    await updateDoc(userDocRef, {
+      role: newRole
+    });
+    await addSystemLog('UPDATE_USER_ROLE', `เปลี่ยนสิทธิ์ผู้ใช้งาน (UID: ${uid}) เป็น ${newRole}`, updatedByEmail);
+  } catch (error) {
+    handleFirestoreError(error, OperationType.UPDATE, `${USERS_COLLECTION}/${uid}`);
   }
 }

@@ -13,9 +13,12 @@ import {
   MapPin,
   Camera,
   Compass,
-  FileSignature
+  FileSignature,
+  FileSpreadsheet,
+  FileText
 } from 'lucide-react';
 import { InspectionLog, FireExtinguisher } from '../types';
+import { exportInspectionLogsToExcel, exportInspectionLogsToPDF, cleanInspectorName } from '../lib/exportUtils';
 
 interface LogHistoryProps {
   logs: InspectionLog[];
@@ -48,8 +51,8 @@ export default function LogHistory({ logs, extinguisher }: LogHistoryProps) {
     return (
       <div className="bg-slate-900 rounded-2xl border border-slate-800 p-8 text-center text-slate-400 flex flex-col items-center justify-center h-full">
         <Layers size={32} className="text-slate-650 mb-2" />
-        <p className="text-sm font-semibold text-slate-300">เลือกถังดับเพลิงเพื่อดูข้อมูลและประวัติ</p>
-        <p className="text-xs mt-1 text-slate-550">คลิกเลือกถังในรายการด้านซ้ายเพื่อดูรายละเอียดประวัติการตรวจสอบอย่างละเอียด</p>
+        <p className="text-sm font-semibold text-slate-300">เลือกอุปกรณ์เพื่อดูข้อมูลและประวัติ</p>
+        <p className="text-xs mt-1 text-slate-550">คลิกเลือกรายการอุปกรณ์ในฝั่งซ้ายเพื่อดูประวัติการตรวจสอบความปลอดภัยอย่างละเอียด</p>
       </div>
     );
   }
@@ -58,14 +61,34 @@ export default function LogHistory({ logs, extinguisher }: LogHistoryProps) {
     <div className="bg-slate-900 rounded-2xl border border-slate-800 shadow-lg overflow-hidden flex flex-col h-full">
       {/* Title Header */}
       <div id="log-history-header" className="p-5 bg-slate-950 border-b border-slate-800">
-        <div className="flex items-center justify-between">
+        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
           <h3 className="font-extrabold text-white text-base flex items-center gap-2">
             <History size={16} className="text-red-500" />
             ประวัติการตรวจเช็ค: <span className="font-mono text-red-500">{extinguisher.id}</span>
           </h3>
-          <span className="text-[10px] font-bold px-2 py-0.5 bg-slate-800 text-slate-300 rounded font-mono">
-            COUNT: {logs.length}
-          </span>
+          <div className="flex items-center gap-1.5">
+            <button
+              onClick={() => exportInspectionLogsToExcel(logs, extinguisher ? [extinguisher] : [], `ประวัติการตรวจเช็ค_${extinguisher.id}.xlsx`)}
+              disabled={logs.length === 0}
+              title="ส่งออกประวัติอุปกรณ์นี้เป็น Excel (.xlsx)"
+              className="py-1 px-2.5 bg-emerald-950/80 hover:bg-emerald-900 border border-emerald-800/80 text-emerald-300 disabled:opacity-40 text-[11px] font-bold rounded-lg transition-colors flex items-center gap-1 cursor-pointer"
+            >
+              <FileSpreadsheet size={12} className="text-emerald-400" />
+              <span>Excel</span>
+            </button>
+            <button
+              onClick={() => exportInspectionLogsToPDF(logs, extinguisher ? [extinguisher] : [], `รายงานการตรวจเช็ค_${extinguisher.id}`)}
+              disabled={logs.length === 0}
+              title="ส่งออกประวัติอุปกรณ์นี้เป็น PDF (.pdf)"
+              className="py-1 px-2.5 bg-rose-950/80 hover:bg-rose-900 border border-rose-800/80 text-rose-300 disabled:opacity-40 text-[11px] font-bold rounded-lg transition-colors flex items-center gap-1 cursor-pointer"
+            >
+              <FileText size={12} className="text-rose-400" />
+              <span>PDF</span>
+            </button>
+            <span className="text-[10px] font-bold px-2 py-1 bg-slate-800 text-slate-300 rounded font-mono ml-1">
+              COUNT: {logs.length}
+            </span>
+          </div>
         </div>
         <p className="text-xs text-slate-400 font-semibold mt-0.5">
           {extinguisher.building} • {extinguisher.floor} ({extinguisher.locationDetails})
@@ -77,8 +100,8 @@ export default function LogHistory({ logs, extinguisher }: LogHistoryProps) {
         {logs.length === 0 ? (
           <div className="p-8 text-center text-slate-500 flex flex-col items-center justify-center h-full">
             <Info size={24} className="text-slate-600 mb-2" />
-            <p className="text-xs font-bold text-slate-400">ยังไม่มีประวัติการบันทึกสำหรับถังนี้</p>
-            <p className="text-[11px] text-slate-550 mt-1">กดปุ่มไอคอนตรวจเช็คถัง เพื่อเริ่มบันทึกการตรวจสอบความปลอดภัย</p>
+            <p className="text-xs font-bold text-slate-400">ยังไม่มีประวัติการบันทึกสำหรับอุปกรณ์ชิ้นนี้</p>
+            <p className="text-[11px] text-slate-550 mt-1">กดปุ่มไอคอนตรวจเช็ค เพื่อเริ่มบันทึกการตรวจสอบความปลอดภัย</p>
           </div>
         ) : (
           logs.map((log) => {
@@ -112,7 +135,7 @@ export default function LogHistory({ logs, extinguisher }: LogHistoryProps) {
                     <div className="flex items-center gap-3 text-xs text-slate-300 mt-2 font-semibold">
                       <span className="flex items-center gap-1">
                         <User size={12} className="text-slate-500" />
-                        {log.inspectorName}
+                        {cleanInspectorName(log.inspectorName)}
                       </span>
                       <span className="flex items-center gap-1 text-slate-400 font-mono">
                         <Calendar size={12} className="text-slate-500" />
@@ -136,75 +159,186 @@ export default function LogHistory({ logs, extinguisher }: LogHistoryProps) {
                       className="border-t border-slate-850 bg-slate-950 p-4 space-y-3.5"
                     >
                       <div className="grid grid-cols-2 gap-2 text-[11px]">
-                        {/* Gauge */}
-                        <div className="flex items-center justify-between p-2.5 bg-slate-900 rounded-lg border border-slate-850">
-                          <span className="text-slate-400 font-bold">1. เกจวัดความดัน</span>
-                          <span className={`font-extrabold ${
-                            log.checklist?.pressure === 'ปกติ' ? 'text-emerald-400' : 'text-rose-400'
-                          }`}>
-                            {log.checklist?.pressure || 'ปกติ'}
-                          </span>
-                        </div>
+                        {extinguisher.assetType === 'ไฟฉุกเฉิน' || extinguisher.category === 'ไฟฉุกเฉิน' || extinguisher.type?.includes('ไฟฉุกเฉิน') || extinguisher.id.startsWith('EM-') || extinguisher.id.startsWith('EL-') ? (
+                          <>
+                            <div className="flex items-center justify-between p-2.5 bg-slate-900 rounded-lg border border-slate-850">
+                              <span className="text-slate-400 font-bold">1. สภาพหลอดไฟ/การติดสว่าง</span>
+                              <span className={`font-extrabold ${ (log.checklist?.emergencyLightStatus || log.checklist?.generalStatus || 'ปกติ') === 'ปกติ' ? 'text-emerald-400' : 'text-rose-400' }`}>
+                                {log.checklist?.emergencyLightStatus || log.checklist?.generalStatus || 'ปกติ'}
+                              </span>
+                            </div>
+                            <div className="flex items-center justify-between p-2.5 bg-slate-900 rounded-lg border border-slate-850">
+                              <span className="text-slate-400 font-bold">2. การเข้าถึง/ตำแหน่งติดตั้ง</span>
+                              <span className={`font-extrabold ${ (log.checklist?.accessibility || 'ปกติ') === 'ปกติ' ? 'text-emerald-400' : 'text-rose-400' }`}>
+                                {log.checklist?.accessibility || 'ปกติ'}
+                              </span>
+                            </div>
+                          </>
+                        ) : extinguisher.assetType === 'ป้ายบอกทางหนีไฟ' || extinguisher.category === 'ป้ายบอกทางหนีไฟ' || extinguisher.type?.includes('ทางหนีไฟ') || extinguisher.type?.includes('Exit') || extinguisher.id.startsWith('EX-') || extinguisher.id.startsWith('EXIT-') || extinguisher.id.startsWith('ES-') ? (
+                          <>
+                            <div className="flex items-center justify-between p-2.5 bg-slate-900 rounded-lg border border-slate-850">
+                              <span className="text-slate-400 font-bold">1. สภาพป้ายไฟ/ความสว่าง</span>
+                              <span className={`font-extrabold ${ (log.checklist?.exitSignStatus || log.checklist?.generalStatus || 'ปกติ') === 'ปกติ' ? 'text-emerald-400' : 'text-rose-400' }`}>
+                                {log.checklist?.exitSignStatus || log.checklist?.generalStatus || 'ปกติ'}
+                              </span>
+                            </div>
+                            <div className="flex items-center justify-between p-2.5 bg-slate-900 rounded-lg border border-slate-850">
+                              <span className="text-slate-400 font-bold">2. ความชัดเจน/การมองเห็น</span>
+                              <span className={`font-extrabold ${ (log.checklist?.accessibility || 'ปกติ') === 'ปกติ' ? 'text-emerald-400' : 'text-rose-400' }`}>
+                                {log.checklist?.accessibility || 'ปกติ'}
+                              </span>
+                            </div>
+                          </>
+                        ) : extinguisher.assetType === 'ตู้แจ้งเหตุเพลิงไหม้' || extinguisher.category === 'ตู้แจ้งเหตุเพลิงไหม้' || extinguisher.type?.includes('แจ้งเหตุ') || extinguisher.id.startsWith('FCP-') || extinguisher.id.startsWith('FA-') ? (
+                          <>
+                            <div className="flex items-center justify-between p-2.5 bg-slate-900 rounded-lg border border-slate-850">
+                              <span className="text-slate-400 font-bold">1. ไฟแสดงสถานะหน้าตู้</span>
+                              <span className={`font-extrabold ${ (log.checklist?.fcpStatusLed || 'ปกติ') === 'ปกติ' ? 'text-emerald-400' : 'text-rose-400' }`}>
+                                {log.checklist?.fcpStatusLed || 'ปกติ'}
+                              </span>
+                            </div>
+                            <div className="flex items-center justify-between p-2.5 bg-slate-900 rounded-lg border border-slate-850">
+                              <span className="text-slate-400 font-bold">2. ทดสอบไฟหน้าตู้</span>
+                              <span className={`font-extrabold ${ (log.checklist?.fcpLampTest || 'ปกติ') === 'ปกติ' ? 'text-emerald-400' : 'text-rose-400' }`}>
+                                {log.checklist?.fcpLampTest || 'ปกติ'}
+                              </span>
+                            </div>
+                            <div className="flex items-center justify-between p-2.5 bg-slate-900 rounded-lg border border-slate-850">
+                              <span className="text-slate-400 font-bold">3. สถานะ FCP</span>
+                              <span className={`font-extrabold ${ (log.checklist?.fcpMainStatus || 'ปกติ') === 'ปกติ' ? 'text-emerald-400' : 'text-rose-400' }`}>
+                                {log.checklist?.fcpMainStatus || 'ปกติ'}
+                              </span>
+                            </div>
+                            <div className="flex items-center justify-between p-2.5 bg-slate-900 rounded-lg border border-slate-850">
+                              <span className="text-slate-400 font-bold">4. Trouble</span>
+                              <span className={`font-extrabold ${ (log.checklist?.fcpTrouble || 'ไม่มี Trouble') === 'ไม่มี Trouble' ? 'text-emerald-400' : 'text-rose-400' }`}>
+                                {log.checklist?.fcpTrouble || 'ไม่มี Trouble'}
+                              </span>
+                            </div>
+                            <div className="flex items-center justify-between p-2.5 bg-slate-900 rounded-lg border border-slate-850">
+                              <span className="text-slate-400 font-bold">5. Disable</span>
+                              <span className={`font-extrabold ${ (log.checklist?.fcpDisable || 'ไม่มี Disable') === 'ไม่มี Disable' ? 'text-emerald-400' : 'text-rose-400' }`}>
+                                {log.checklist?.fcpDisable || 'ไม่มี Disable'}
+                              </span>
+                            </div>
+                            <div className="flex items-center justify-between p-2.5 bg-slate-900 rounded-lg border border-slate-850">
+                              <span className="text-slate-400 font-bold">6. พื้นที่หน้าตู้</span>
+                              <span className={`font-extrabold ${ (log.checklist?.accessibility || 'ปกติ') === 'ปกติ' ? 'text-emerald-400' : 'text-rose-400' }`}>
+                                {log.checklist?.accessibility || 'ปกติ'}
+                              </span>
+                            </div>
+                          </>
+                        ) : extinguisher.assetType === 'ตู้ดับเพลิง' || extinguisher.category === 'ตู้ดับเพลิง' || extinguisher.type?.includes('ตู้ดับเพลิง') ? (
+                          <>
+                            <div className="flex items-center justify-between p-2.5 bg-slate-900 rounded-lg border border-slate-850">
+                              <span className="text-slate-400 font-bold">1. สภาพตู้ดับเพลิง</span>
+                              <span className={`font-extrabold ${ (log.checklist?.cabinetCondition || log.checklist?.cabinetGlass || 'ปกติ') === 'ปกติ' ? 'text-emerald-400' : 'text-rose-400' }`}>
+                                {log.checklist?.cabinetCondition || log.checklist?.cabinetGlass || 'ปกติ'}
+                              </span>
+                            </div>
+                            <div className="flex items-center justify-between p-2.5 bg-slate-900 rounded-lg border border-slate-850">
+                              <span className="text-slate-400 font-bold">2. วาวล์เปิดปิดน้ำ</span>
+                              <span className={`font-extrabold ${ (log.checklist?.valveStatus || 'ปกติ') === 'ปกติ' ? 'text-emerald-400' : 'text-rose-400' }`}>
+                                {log.checklist?.valveStatus || 'ปกติ'}
+                              </span>
+                            </div>
+                            <div className="flex items-center justify-between p-2.5 bg-slate-900 rounded-lg border border-slate-850">
+                              <span className="text-slate-400 font-bold">3. สายฉีดน้ำดับเพลิง</span>
+                              <span className={`font-extrabold ${ (log.checklist?.hoseCondition || 'ปกติ') === 'ปกติ' ? 'text-emerald-400' : 'text-rose-400' }`}>
+                                {log.checklist?.hoseCondition || 'ปกติ'}
+                              </span>
+                            </div>
+                            <div className="flex items-center justify-between p-2.5 bg-slate-900 rounded-lg border border-slate-850">
+                              <span className="text-slate-400 font-bold">4. อุปกรณ์ภายในตู้</span>
+                              <span className={`font-extrabold ${ (log.checklist?.cabinetEquipment || 'ครบ') === 'ครบ' ? 'text-emerald-400' : 'text-rose-400' }`}>
+                                {log.checklist?.cabinetEquipment || 'ครบ'}
+                              </span>
+                            </div>
+                          </>
+                        ) : extinguisher.assetType === 'ประตูกันไฟ' || extinguisher.category === 'ประตูกันไฟ' || extinguisher.type?.includes('ประตู') ? (
+                          <>
+                            <div className="flex items-center justify-between p-2.5 bg-slate-900 rounded-lg border border-slate-850">
+                              <span className="text-slate-400 font-bold">1. สภาพประตู</span>
+                              <span className={`font-extrabold ${ (log.checklist?.doorCondition || log.checklist?.doorCloser || 'ปกติ') === 'ปกติ' ? 'text-emerald-400' : 'text-rose-400' }`}>
+                                {log.checklist?.doorCondition || log.checklist?.doorCloser || 'ปกติ'}
+                              </span>
+                            </div>
+                            <div className="flex items-center justify-between p-2.5 bg-slate-900 rounded-lg border border-slate-850">
+                              <span className="text-slate-400 font-bold">2. สวิต์ปุ่มกด-แม่เหล็ก</span>
+                              <span className={`font-extrabold ${ (log.checklist?.magnetSwitch || log.checklist?.panicBar || 'ปกติ') === 'ปกติ' ? 'text-emerald-400' : 'text-rose-400' }`}>
+                                {log.checklist?.magnetSwitch || log.checklist?.panicBar || 'ปกติ'}
+                              </span>
+                            </div>
+                            <div className="flex items-center justify-between p-2.5 bg-slate-900 rounded-lg border border-slate-850">
+                              <span className="text-slate-400 font-bold">3. ประตูปิดภายใน 15 วินาที</span>
+                              <span className={`font-extrabold ${ (log.checklist?.autoCloseSpeed || log.checklist?.fireGasket || 'ปกติ') === 'ปกติ' ? 'text-emerald-400' : 'text-rose-400' }`}>
+                                {log.checklist?.autoCloseSpeed || log.checklist?.fireGasket || 'ปกติ'}
+                              </span>
+                            </div>
+                          </>
+                        ) : (
+                          <>
+                            {/* Gauge */}
+                            <div className="flex items-center justify-between p-2.5 bg-slate-900 rounded-lg border border-slate-850">
+                              <span className="text-slate-400 font-bold">1. เกจวัดความดัน</span>
+                              <span className={`font-extrabold ${
+                                log.checklist?.pressure === 'ปกติ' ? 'text-emerald-400' : 'text-rose-400'
+                              }`}>
+                                {log.checklist?.pressure || 'ปกติ'}
+                              </span>
+                            </div>
 
-                        {/* Safety Pin */}
-                        <div className="flex items-center justify-between p-2.5 bg-slate-900 rounded-lg border border-slate-850">
-                          <span className="text-slate-400 font-bold">2. สลักนิรภัย/ซีล</span>
-                          <span className={`font-extrabold ${
-                            log.checklist?.safetyPin === 'ปกติ' ? 'text-emerald-400' : 'text-rose-400'
-                          }`}>
-                            {log.checklist?.safetyPin || 'ปกติ'}
-                          </span>
-                        </div>
+                            {/* Safety Pin */}
+                            <div className="flex items-center justify-between p-2.5 bg-slate-900 rounded-lg border border-slate-850">
+                              <span className="text-slate-400 font-bold">2. สลักนิรภัย/ซีล</span>
+                              <span className={`font-extrabold ${
+                                log.checklist?.safetyPin === 'ปกติ' ? 'text-emerald-400' : 'text-rose-400'
+                              }`}>
+                                {log.checklist?.safetyPin || 'ปกติ'}
+                              </span>
+                            </div>
 
-                        {/* Hose & Nozzle */}
-                        <div className="flex items-center justify-between p-2.5 bg-slate-900 rounded-lg border border-slate-850">
-                          <span className="text-slate-400 font-bold">3. สายฉีด/หัวฉีด</span>
-                          <span className={`font-extrabold ${
-                            log.checklist?.hoseNozzle === 'ปกติ' ? 'text-emerald-400' : 'text-rose-400'
-                          }`}>
-                            {log.checklist?.hoseNozzle || 'ปกติ'}
-                          </span>
-                        </div>
+                            {/* Hose & Nozzle */}
+                            <div className="flex items-center justify-between p-2.5 bg-slate-900 rounded-lg border border-slate-850">
+                              <span className="text-slate-400 font-bold">3. สายฉีด/หัวฉีด</span>
+                              <span className={`font-extrabold ${
+                                log.checklist?.hoseNozzle === 'ปกติ' ? 'text-emerald-400' : 'text-rose-400'
+                              }`}>
+                                {log.checklist?.hoseNozzle || 'ปกติ'}
+                              </span>
+                            </div>
 
-                        {/* Body status */}
-                        <div className="flex items-center justify-between p-2.5 bg-slate-900 rounded-lg border border-slate-850">
-                          <span className="text-slate-400 font-bold">4. ตัวถังภายนอก</span>
-                          <span className={`font-extrabold ${
-                            log.checklist?.bodyCondition === 'ปกติ' ? 'text-emerald-400' : 'text-rose-400'
-                          }`}>
-                            {log.checklist?.bodyCondition || 'ปกติ'}
-                          </span>
-                        </div>
+                            {/* Body status */}
+                            <div className="flex items-center justify-between p-2.5 bg-slate-900 rounded-lg border border-slate-850">
+                              <span className="text-slate-400 font-bold">4. ตัวถังภายนอก</span>
+                              <span className={`font-extrabold ${
+                                log.checklist?.bodyCondition === 'ปกติ' ? 'text-emerald-400' : 'text-rose-400'
+                              }`}>
+                                {log.checklist?.bodyCondition || 'ปกติ'}
+                              </span>
+                            </div>
 
-                        {/* Instruction Label */}
-                        <div className="flex items-center justify-between p-2.5 bg-slate-900 rounded-lg border border-slate-850">
-                          <span className="text-slate-400 font-bold">5. ป้ายแนะนำวิธีใช้</span>
-                          <span className={`font-extrabold ${
-                            log.checklist?.instructionLabel === 'ปกติ' ? 'text-emerald-400' : 'text-rose-400'
-                          }`}>
-                            {log.checklist?.instructionLabel || 'ปกติ'}
-                          </span>
-                        </div>
+                            {/* Instruction Label */}
+                            <div className="flex items-center justify-between p-2.5 bg-slate-900 rounded-lg border border-slate-850">
+                              <span className="text-slate-400 font-bold">5. ป้ายแนะนำวิธีใช้</span>
+                              <span className={`font-extrabold ${
+                                log.checklist?.instructionLabel === 'ปกติ' ? 'text-emerald-400' : 'text-rose-400'
+                              }`}>
+                                {log.checklist?.instructionLabel || 'ปกติ'}
+                              </span>
+                            </div>
 
-                        {/* Accessibility */}
-                        <div className="flex items-center justify-between p-2.5 bg-slate-900 rounded-lg border border-slate-850">
-                          <span className="text-slate-400 font-bold">6. สิ่งกีดขวางติดตั้ง</span>
-                          <span className={`font-extrabold ${
-                            log.checklist?.accessibility === 'ปกติ' ? 'text-emerald-400' : 'text-rose-400'
-                          }`}>
-                            {log.checklist?.accessibility || 'ปกติ'}
-                          </span>
-                        </div>
-
-                        {/* Weight Status */}
-                        <div className="flex items-center justify-between p-2.5 bg-slate-900 rounded-lg border border-slate-850 col-span-2">
-                          <span className="text-slate-400 font-bold">7. ระดับน้ำหนักตัวถัง</span>
-                          <span className={`font-extrabold ${
-                            log.checklist?.weightStatus === 'ปกติ' ? 'text-emerald-400' : 'text-rose-400'
-                          }`}>
-                            {log.checklist?.weightStatus === 'ปกติ' ? 'ปกติ (น้ำหนักเต็ม)' : 'ชำรุด (น้ำหนักพร่อง)'}
-                          </span>
-                        </div>
+                            {/* Accessibility */}
+                            <div className="flex items-center justify-between p-2.5 bg-slate-900 rounded-lg border border-slate-850">
+                              <span className="text-slate-400 font-bold">6. สิ่งกีดขวางติดตั้ง</span>
+                              <span className={`font-extrabold ${
+                                log.checklist?.accessibility === 'ปกติ' ? 'text-emerald-400' : 'text-rose-400'
+                              }`}>
+                                {log.checklist?.accessibility || 'ปกติ'}
+                              </span>
+                            </div>
+                          </>
+                        )}
                       </div>
 
                       {/* GPS distance check */}

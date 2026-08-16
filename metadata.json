@@ -1,6 +1,6 @@
 {
-  "name": "Fire Extinguisher Inspection",
-  "description": "แอปพลิเคชันสำหรับตรวจสอบและบันทึกสถานะถังดับเพลิง (Fire Extinguisher Inspection App)",
+  "name": "Safety Management System",
+  "description": "ระบบจัดการและตรวจสอบอุปกรณ์ความปลอดภัยครบวงจร (Safety Management System)",
   "requestFramePermissions": ["camera"],
   "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
 }

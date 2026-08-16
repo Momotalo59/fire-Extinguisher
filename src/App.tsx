@@ -14,8 +14,18 @@ import {
   LogOut,
   User,
   ChevronLeft,
-  History
+  ChevronDown,
+  History,
+  Users,
+  Shield,
+  Bell,
+  Building2,
+  Sun,
+  Moon,
+  Menu,
+  X
 } from 'lucide-react';
+import { useTheme } from './lib/ThemeContext';
 import { 
   getExtinguishers, 
   getInspectionLogs, 
@@ -23,9 +33,22 @@ import {
   updateExtinguisher, 
   deleteExtinguisher, 
   addInspectionLog,
-  seedDatabaseIfEmpty 
+  seedDatabaseIfEmpty,
+  isInspectedInCurrentMonth
 } from './lib/dbHelpers';
 import { FireExtinguisher, InspectionLog } from './types';
+import { cleanInspectorName } from './lib/exportUtils';
+import { ASSET_CATEGORIES, HOSPITAL_BUILDINGS, getAssetCategory, getBuildingEquipmentStats, buildingSupportsFireDoor } from './lib/assetHelpers';
+import { 
+  checkExpiringExtinguishers, 
+  autoSyncExpiryStatuses, 
+  playAlertChimeSound, 
+  requestBrowserNotificationPermission, 
+  sendBrowserExpiryNotification, 
+  ExpiryAlertItem 
+} from './lib/autoExpiryAlert';
+import ExpiryAlertBanner from './components/ExpiryAlertBanner';
+import NotificationCenterModal from './components/NotificationCenterModal';
 import DashboardStats from './components/DashboardStats';
 import DashboardCharts from './components/DashboardCharts';
 import ExtinguisherList from './components/ExtinguisherList';
@@ -34,15 +57,27 @@ import LogHistory from './components/LogHistory';
 import QRScanner from './components/QRScanner';
 import AuthScreen from './components/AuthScreen';
 import AllInspectionLogs from './components/AllInspectionLogs';
+import UserManagementModal from './components/UserManagementModal';
+import SafetyGuidelineCard from './components/SafetyGuidelineCard';
 import { onAuthStateChanged, signOut, User as FirebaseUser } from 'firebase/auth';
 import { doc, getDoc } from 'firebase/firestore';
 import { auth, db } from './lib/firebase';
 
 export default function App() {
+  const { theme, toggleTheme } = useTheme();
   const [extinguishers, setExtinguishers] = useState<FireExtinguisher[]>([]);
   const [logs, setLogs] = useState<InspectionLog[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+
+  // Auto-Expiry Alerts & Notifications States
+  const [expiryAlerts, setExpiryAlerts] = useState<ExpiryAlertItem[]>([]);
+  const [isNotificationModalOpen, setIsNotificationModalOpen] = useState(false);
+  const [dismissBanner, setDismissBanner] = useState(false);
+  const [soundEnabled, setSoundEnabled] = useState(true);
+  const [hasNotificationPermission, setHasNotificationPermission] = useState(
+    typeof window !== 'undefined' && 'Notification' in window && Notification.permission === 'granted'
+  );
 
   // Auth States
   const [user, setUser] = useState<FirebaseUser | null>(null);
@@ -51,16 +86,30 @@ export default function App() {
 
   // Selection & UI States
   const [currentTab, setCurrentTab] = useState<'dashboard' | 'extinguishers' | 'history'>('dashboard');
+  const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false);
+  const [selectedAssetCategory, setSelectedAssetCategory] = useState<string>('All');
+  const [selectedBuilding, setSelectedBuilding] = useState<string>('All');
+  const [dashboardCategory, setDashboardCategory] = useState<string>('All');
+  const [isEquipmentSubmenuOpen, setIsEquipmentSubmenuOpen] = useState<boolean>(true);
+  const [isBuildingSubmenuOpen, setIsBuildingSubmenuOpen] = useState<boolean>(true);
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [selectedStatusFilter, setSelectedStatusFilter] = useState<string | null>(null);
   const [activeInspection, setActiveInspection] = useState<FireExtinguisher | null>(null);
   const [isScannerOpen, setIsScannerOpen] = useState(false);
+  const [isUserMgmtOpen, setIsUserMgmtOpen] = useState(false);
   const [currentDate, setCurrentDate] = useState('');
+  const [currentTime, setCurrentTime] = useState('');
   const [showToast, setShowToast] = useState(false);
   const [toastMessage, setToastMessage] = useState('');
 
   // Live clock
   useEffect(() => {
+    // Auto-open QR scanner if launched via ?scan=true URL
+    const params = new URLSearchParams(window.location.search);
+    if (params.get('scan') === 'true' || window.location.hash === '#scan') {
+      setIsScannerOpen(true);
+    }
+
     const updateTime = () => {
       const now = new Date();
       setCurrentDate(now.toLocaleDateString('th-TH', {
@@ -72,6 +121,12 @@ export default function App() {
         minute: '2-digit',
         second: '2-digit'
       }) + ' น.');
+
+      setCurrentTime(now.toLocaleTimeString('th-TH', {
+        hour: '2-digit',
+        minute: '2-digit',
+        second: '2-digit'
+      }));
     };
     updateTime();
     const interval = setInterval(updateTime, 1000);
@@ -121,11 +176,34 @@ export default function App() {
       await seedDatabaseIfEmpty();
       
       // Load from Firestore
-      const exData = await getExtinguishers();
+      let exData = await getExtinguishers();
       const logsData = await getInspectionLogs();
       
+      // Auto-sync expiry status in Firestore if expiry date passed or is within 30 days
+      const updatedCount = await autoSyncExpiryStatuses(exData);
+      if (updatedCount > 0) {
+        exData = await getExtinguishers();
+      }
+
       setExtinguishers(exData);
       setLogs(logsData);
+
+      // Compute auto-expiry alerts
+      const alerts = checkExpiringExtinguishers(exData);
+      setExpiryAlerts(alerts);
+
+      // Trigger sound alert & push notification if expiring tanks detected
+      if (alerts.length > 0) {
+        if (soundEnabled) {
+          playAlertChimeSound();
+        }
+        if (hasNotificationPermission) {
+          sendBrowserExpiryNotification(
+            '⚡ แจ้งเตือนถังดับเพลิงใกล้หมดอายุ',
+            `ตรวจพบถังดับเพลิงใกล้/หมดอายุรวม ${alerts.length} ถัง โปรดตรวจสอบในระบบ`
+          );
+        }
+      }
 
       // Auto-select first extinguisher if none selected
       if (exData.length > 0 && !selectedId) {
@@ -136,6 +214,17 @@ export default function App() {
       setError("ไม่สามารถดึงข้อมูลจากฐานข้อมูล Firebase ได้ กรุณาตรวจสอบอินเทอร์เน็ตหรือตั้งค่า Firebase: " + err.message);
     } finally {
       setLoading(false);
+    }
+  };
+
+  // Request browser notification permission helper
+  const handleRequestNotificationPermission = async () => {
+    const granted = await requestBrowserNotificationPermission();
+    setHasNotificationPermission(granted);
+    if (granted) {
+      triggerToast('เปิดรับการแจ้งเตือนบนเบราว์เซอร์สำเร็จ!');
+    } else {
+      triggerToast('ไม่สามารถเปิดการแจ้งเตือนได้ หรือถูกปฏิเสธสิทธิ์ในเบราว์เซอร์');
     }
   };
 
@@ -218,7 +307,11 @@ export default function App() {
     if (found) {
       setSelectedId(found.id);
       setActiveInspection(found); // Open inspection form for this scanned item!
-      triggerToast(`ตรวจพบรหัสถัง ${found.id} เริ่มทำรายการตรวจเช็ค...`);
+      if (isInspectedInCurrentMonth(found.lastInspectedAt)) {
+        triggerToast(`ถังรหัส ${found.id} ถูกตรวจเช็คในประจำเดือนนี้แล้ว`);
+      } else {
+        triggerToast(`ตรวจพบรหัสถัง ${found.id} เริ่มทำรายการตรวจเช็ค...`);
+      }
     } else {
       triggerToast(`ไม่พบรหัสถังดับเพลิง ${id} ในระบบของคุณ`);
     }
@@ -250,129 +343,650 @@ export default function App() {
   }
 
   return (
-    <div id="app-root-container" className="min-h-screen bg-slate-950 text-slate-100 font-sans antialiased flex flex-col">
+    <div id="app-root-container" className="h-screen bg-slate-950 text-slate-100 font-sans antialiased flex flex-col overflow-hidden">
       
-      {/* Header Bar - Professional Polish Edition */}
-      <nav id="app-main-header" className="bg-slate-900 text-white px-6 md:px-8 h-16 flex items-center justify-between shadow-lg shrink-0 sticky top-0 z-40">
-        <div className="flex items-center space-x-3">
-          <div className="w-8 h-8 bg-red-600 rounded flex items-center justify-center text-white shadow-md shadow-red-600/30">
+      {/* Header Bar - Fixed Top Navigation */}
+      <nav id="app-main-header" className="sticky top-0 bg-slate-900 text-white px-2.5 sm:px-4 md:px-6 h-16 flex items-center justify-between shadow-lg shrink-0 z-40 gap-2 border-b border-slate-800">
+        <div className="flex items-center space-x-2 sm:space-x-3 shrink-0">
+          {/* Mobile Hamburger Menu Button (3 horizontal lines / X when open) */}
+          <button
+            onClick={() => setIsMobileMenuOpen(!isMobileMenuOpen)}
+            className="md:hidden p-2 rounded-xl bg-slate-850 hover:bg-slate-800 text-slate-200 hover:text-white border border-slate-800 transition-all cursor-pointer flex items-center justify-center shrink-0 shadow-xs active:scale-95"
+            title={isMobileMenuOpen ? "ปิดเมนูหลัก" : "เปิดเมนูหลัก"}
+            aria-label={isMobileMenuOpen ? "ปิดเมนูหลัก" : "เปิดเมนูหลัก"}
+          >
+            {isMobileMenuOpen ? (
+              <X size={20} className="text-red-400 animate-in fade-in" />
+            ) : (
+              <Menu size={20} className="text-slate-100 animate-in fade-in" />
+            )}
+          </button>
+
+          <div className="w-8 h-8 bg-red-600 rounded flex items-center justify-center text-white shadow-md shadow-red-600/30 shrink-0">
             <Flame size={18} className="animate-pulse" />
           </div>
           <div>
             <div className="flex items-center">
-              <span className="text-base md:text-lg font-bold tracking-tight">FIRE SAFE</span>
-              <span className="text-xs font-medium text-slate-400 border-l border-slate-700 ml-2 pl-2 hidden sm:inline">Asset Manager</span>
+              <span className="text-sm sm:text-base md:text-lg font-bold tracking-tight whitespace-nowrap text-white">Safety Management</span>
             </div>
           </div>
         </div>
 
         {/* Status badges & Controls */}
-        <div className="flex items-center space-x-3 md:space-x-4 text-sm font-medium">
+        <div className="flex items-center gap-1.5 sm:gap-2 md:gap-3 text-sm font-medium shrink-0 max-w-full overflow-hidden">
           
           {user && (
-            <div className="flex items-center gap-2 bg-slate-850/80 border border-slate-800/50 px-2.5 py-1 rounded-xl">
-              <div className="w-6 h-6 rounded-full bg-red-600/95 text-white flex items-center justify-center text-[10px] font-bold shadow-sm shrink-0">
-                <User size={12} />
+            <div className="hidden sm:flex items-center gap-1.5 bg-slate-850/80 border border-slate-800/50 px-2 sm:px-2.5 py-1 rounded-xl shrink-0 max-w-[120px] md:max-w-[180px]">
+              <div className="w-5 h-5 sm:w-6 sm:h-6 rounded-full bg-red-600/95 text-white flex items-center justify-center text-[10px] font-bold shadow-sm shrink-0">
+                <User size={11} />
               </div>
-              <div className="flex flex-col text-left max-w-[130px] md:max-w-[180px]">
-                <span className="text-[11px] text-slate-100 font-bold truncate leading-tight">
-                  {userProfile?.fullName || user.email || 'Guest User'}
+              <div className="flex flex-col text-left overflow-hidden">
+                <span className="text-[10px] sm:text-[11px] text-slate-100 font-bold truncate leading-tight">
+                  {userProfile?.fullName ? userProfile.fullName.split(' ')[0] : (user.email?.split('@')[0] || 'User')}
                 </span>
-                <span className="text-[9px] text-slate-400 font-semibold leading-none mt-0.5 truncate">
-                  {userProfile?.role === 'Admin' ? 'ผู้ดูแลระบบ (Admin)' : 'ผู้ตรวจสอบ (Inspector)'} • {userProfile?.department || 'ทั่วไป'}
+                <span className="text-[8px] sm:text-[9px] text-slate-400 font-semibold leading-none mt-0.5 truncate hidden md:block">
+                  {userProfile?.role === 'Admin' ? 'Admin' : 'Inspector'} • {userProfile?.department || 'ช่าง'}
                 </span>
               </div>
-              <button
-                onClick={() => signOut(auth)}
-                className="text-[10px] text-slate-400 hover:text-red-400 transition-colors cursor-pointer border-l border-slate-700/80 pl-2 ml-1 flex items-center gap-1 font-bold"
-                title="ออกจากระบบ"
-              >
-                <LogOut size={11} />
-                <span className="hidden sm:inline">ออก</span>
-              </button>
             </div>
           )}
 
-          <div className="hidden xl:flex items-center gap-1.5 text-xs text-slate-400 font-medium font-mono">
-            <Clock size={13} className="text-slate-500" />
+          {/* Date Month Year - Desktop only */}
+          <div className="hidden xl:flex items-center gap-1.5 text-xs text-slate-300 font-medium font-mono shrink-0">
+            <Clock size={13} className="text-slate-400 shrink-0" />
             <span>{currentDate ? currentDate.split(' ')[1] + ' ' + currentDate.split(' ')[2] + ' ' + currentDate.split(' ')[3] : 'กำลังโหลด...'}</span>
           </div>
 
+          {/* Online badge & Digital Clock */}
+          <div className="hidden sm:flex items-center gap-1.5 border-l border-slate-800 pl-2 sm:pl-2.5 shrink-0">
+            <div className="flex items-center gap-1 bg-emerald-950/70 text-emerald-400 border border-emerald-800/50 px-2 py-0.5 rounded-full text-[10px] sm:text-[11px] font-bold shrink-0">
+              <span className="relative flex h-2 w-2">
+                <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75"></span>
+                <span className="relative inline-flex rounded-full h-2 w-2 bg-emerald-500"></span>
+              </span>
+              <span className="hidden md:inline">Online</span>
+            </div>
+
+            {currentTime && (
+              <div className="hidden lg:flex items-center gap-1.5 text-slate-200 font-mono text-xs bg-slate-950/80 px-2 py-0.5 rounded-lg border border-slate-800 shadow-inner shrink-0">
+                <Clock size={11} className="text-red-400 shrink-0" />
+                <span className="font-semibold tracking-wider text-slate-100">{currentTime}</span>
+              </div>
+            )}
+          </div>
+
+          {/* Theme Mode Toggle Button */}
+          <button
+            onClick={toggleTheme}
+            className="relative p-2 rounded-xl bg-slate-850 hover:bg-slate-800 text-slate-300 hover:text-white border border-slate-800 transition-all cursor-pointer shrink-0 flex items-center gap-1.5"
+            title={theme === 'dark' ? 'เปลี่ยนเป็นโหมดสว่าง (Light Mode)' : 'เปลี่ยนเป็นโหมดมืด (Dark Mode)'}
+          >
+            {theme === 'dark' ? (
+              <>
+                <Sun size={17} className="text-amber-400" />
+                <span className="hidden xl:inline text-[11px] font-bold text-slate-200">โหมดสว่าง</span>
+              </>
+            ) : (
+              <>
+                <Moon size={17} className="text-indigo-400" />
+                <span className="hidden xl:inline text-[11px] font-bold text-slate-200">โหมดมืด</span>
+              </>
+            )}
+          </button>
+
+          {/* Notification Bell Button with Badge */}
+          <button
+            onClick={() => setIsNotificationModalOpen(true)}
+            className="relative p-2 rounded-xl bg-slate-850 hover:bg-slate-800 text-slate-300 hover:text-white border border-slate-800 transition-all cursor-pointer shrink-0"
+            title="ศูนย์แจ้งเตือนถังใกล้หมดอายุ/ชำรุด"
+          >
+            <Bell size={17} className={expiryAlerts.length > 0 ? "text-amber-400 animate-pulse" : "text-slate-400"} />
+            {expiryAlerts.length > 0 && (
+              <span className="absolute -top-1 -right-1 bg-red-600 text-white text-[10px] font-extrabold w-4 h-4 rounded-full flex items-center justify-center border-2 border-slate-900 shadow-md animate-bounce">
+                {expiryAlerts.length}
+              </span>
+            )}
+          </button>
+
+          {/* Scan QR Button - PROMINENT & ALWAYS VISIBLE */}
           <button
             onClick={() => {
               setActiveInspection(null);
               setIsScannerOpen(true);
             }}
-            className="bg-red-600 hover:bg-red-500 text-white px-3 py-2 rounded-lg font-bold text-xs transition-all shadow-md shadow-red-900/30 flex items-center gap-1.5 cursor-pointer hover:scale-[1.02] active:scale-[0.98] shrink-0"
+            className="bg-red-600 hover:bg-red-500 text-white px-2.5 sm:px-3 py-1.5 sm:py-2 rounded-xl font-bold text-xs transition-all shadow-md shadow-red-900/40 flex items-center gap-1.5 cursor-pointer hover:scale-[1.02] active:scale-[0.98] shrink-0 z-10 border border-red-500/50"
+            title="สแกน QR Code"
           >
-            <Scan size={13} />
-            <span className="hidden sm:inline">สแกน QR Code</span>
-            <span className="sm:hidden">สแกน</span>
+            <Scan size={15} className="animate-pulse shrink-0" />
+            <span className="whitespace-nowrap font-extrabold text-xs">สแกน QR</span>
           </button>
         </div>
       </nav>
 
-      {/* Sub-header Navigation Tabs */}
-      <div id="app-sub-navigation" className="bg-slate-900 border-b border-slate-800 sticky top-16 z-30 shadow-md">
-        <div className="max-w-7xl mx-auto px-4 md:px-6 flex items-center justify-between overflow-x-auto scrollbar-none">
-          <div className="flex space-x-1 md:space-x-2 py-3">
+      {/* Mobile Slide-Down Navigation Menu */}
+      <AnimatePresence>
+        {isMobileMenuOpen && (
+          <motion.div
+            id="mobile-navigation-drawer"
+            key="mobile-nav-menu"
+            initial={{ opacity: 0, height: 0 }}
+            animate={{ opacity: 1, height: 'auto' }}
+            exit={{ opacity: 0, height: 0 }}
+            transition={{ duration: 0.2, ease: 'easeInOut' }}
+            className="md:hidden bg-slate-900 border-b border-slate-800 shadow-2xl z-40 overflow-y-auto max-h-[85vh] divide-y divide-slate-800"
+          >
+            {/* User Profile Bar on Mobile */}
+            {user && (
+              <div className="p-3 bg-slate-950/70 flex items-center justify-between gap-2 border-b border-slate-800/60">
+                <div className="flex items-center gap-2.5 min-w-0">
+                  <div className="w-8 h-8 rounded-full bg-red-600 text-white flex items-center justify-center text-xs font-bold shadow-md shrink-0">
+                    <User size={15} />
+                  </div>
+                  <div className="truncate">
+                    <div className="text-xs font-bold text-slate-100 truncate">
+                      {userProfile?.fullName || user.email?.split('@')[0]}
+                    </div>
+                    <div className="text-[10px] text-slate-400 font-medium truncate">
+                      {userProfile?.role === 'Admin' ? 'ผู้ดูแลระบบ (Admin)' : 'เจ้าหน้าที่ตรวจเช็ค'} • {userProfile?.department || 'ช่าง'}
+                    </div>
+                  </div>
+                </div>
+                <button
+                  onClick={() => {
+                    setIsMobileMenuOpen(false);
+                    signOut(auth);
+                  }}
+                  className="px-2.5 py-1.5 rounded-lg text-xs font-bold text-slate-400 hover:text-red-400 hover:bg-red-950/40 border border-slate-800 flex items-center gap-1 shrink-0 transition-colors"
+                  title="ออกจากระบบ"
+                >
+                  <LogOut size={13} />
+                  <span>ออก</span>
+                </button>
+              </div>
+            )}
+
+            {/* Menu List */}
+            <div className="p-3 space-y-2 bg-slate-900">
+              <div className="text-[10px] font-extrabold uppercase tracking-wider text-slate-400 px-1">
+                เมนูหลักระบบ (Main Menu)
+              </div>
+
+              {/* 1. Dashboard */}
+              <button
+                onClick={() => {
+                  setActiveInspection(null);
+                  setCurrentTab('dashboard');
+                  setIsMobileMenuOpen(false);
+                }}
+                className={`w-full flex items-center justify-between p-2.5 rounded-xl text-xs font-bold transition-all cursor-pointer ${
+                  currentTab === 'dashboard'
+                    ? 'bg-red-600 text-white shadow-md'
+                    : 'bg-slate-850 hover:bg-slate-800 text-slate-200 border border-slate-800'
+                }`}
+              >
+                <div className="flex items-center gap-2.5">
+                  <TrendingUp size={16} className={currentTab === 'dashboard' ? 'text-white' : 'text-red-400'} />
+                  <span>แดชบอร์ดความปลอดภัย</span>
+                </div>
+                <span className="text-[10px] opacity-80 font-mono">ภาพรวม</span>
+              </button>
+
+              {/* 2. Equipment Categories Expandable Section */}
+              <div className="rounded-xl border border-slate-800 bg-slate-950/40 p-2 space-y-2">
+                <button
+                  onClick={() => setIsEquipmentSubmenuOpen(!isEquipmentSubmenuOpen)}
+                  className="w-full flex items-center justify-between p-1.5 text-xs font-bold text-slate-200 cursor-pointer"
+                >
+                  <div className="flex items-center gap-2">
+                    <Database size={16} className="text-red-400" />
+                    <span>รายการอุปกรณ์ ({extinguishers.length})</span>
+                  </div>
+                  <ChevronDown size={15} className={`transition-transform duration-200 ${isEquipmentSubmenuOpen ? 'rotate-180' : ''}`} />
+                </button>
+
+                {isEquipmentSubmenuOpen && (
+                  <div className="grid grid-cols-2 gap-1.5 pt-1 border-t border-slate-800/60">
+                    <button
+                      onClick={() => {
+                        setActiveInspection(null);
+                        setCurrentTab('extinguishers');
+                        setSelectedAssetCategory('All');
+                        setSelectedBuilding('All');
+                        setIsMobileMenuOpen(false);
+                      }}
+                      className={`p-2 rounded-lg text-xs font-bold flex items-center justify-between cursor-pointer transition-colors ${
+                        currentTab === 'extinguishers' && selectedAssetCategory === 'All' && selectedBuilding === 'All'
+                          ? 'bg-red-600 text-white font-extrabold shadow-xs'
+                          : 'bg-slate-850 text-slate-300 hover:bg-slate-800'
+                      }`}
+                    >
+                      <span className="flex items-center gap-1.5">
+                        <span>📋</span>
+                        <span>ทั้งหมด</span>
+                      </span>
+                      <span className="font-mono text-[10px] opacity-80">({extinguishers.length})</span>
+                    </button>
+
+                    {ASSET_CATEGORIES.map((cat) => {
+                      const count = extinguishers.filter(e => getAssetCategory(e) === cat.id).length;
+                      const isSelected = currentTab === 'extinguishers' && selectedAssetCategory === cat.id;
+
+                      return (
+                        <button
+                          key={cat.id}
+                          onClick={() => {
+                            setActiveInspection(null);
+                            setCurrentTab('extinguishers');
+                            setSelectedAssetCategory(cat.id);
+                            setIsMobileMenuOpen(false);
+                          }}
+                          className={`p-2 rounded-lg text-xs font-bold flex items-center justify-between cursor-pointer transition-colors ${
+                            isSelected
+                              ? 'bg-red-600 text-white font-extrabold shadow-xs'
+                              : 'bg-slate-850 text-slate-300 hover:bg-slate-800'
+                          }`}
+                        >
+                          <span className="flex items-center gap-1.5 truncate">
+                            <span>{cat.icon}</span>
+                            <span className="truncate">{cat.name.split(' (')[0]}</span>
+                          </span>
+                          <span className="font-mono text-[10px] opacity-80 shrink-0 ml-1">({count})</span>
+                        </button>
+                      );
+                    })}
+                  </div>
+                )}
+              </div>
+
+              {/* 3. Buildings Expandable Section */}
+              <div className="rounded-xl border border-slate-800 bg-slate-950/40 p-2 space-y-2">
+                <button
+                  onClick={() => setIsBuildingSubmenuOpen(!isBuildingSubmenuOpen)}
+                  className="w-full flex items-center justify-between p-1.5 text-xs font-bold text-slate-200 cursor-pointer"
+                >
+                  <div className="flex items-center gap-2">
+                    <Building2 size={16} className="text-blue-400" />
+                    <span>แยกตามอาคาร ({HOSPITAL_BUILDINGS.length})</span>
+                  </div>
+                  <ChevronDown size={15} className={`transition-transform duration-200 ${isBuildingSubmenuOpen ? 'rotate-180' : ''}`} />
+                </button>
+
+                {isBuildingSubmenuOpen && (
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-1.5 pt-1 border-t border-slate-800/60">
+                    {HOSPITAL_BUILDINGS.map((bldg) => {
+                      const stats = getBuildingEquipmentStats(extinguishers, bldg.name);
+                      const isSelected = currentTab === 'extinguishers' && selectedBuilding === bldg.name;
+
+                      return (
+                        <button
+                          key={bldg.id}
+                          onClick={() => {
+                            setActiveInspection(null);
+                            setCurrentTab('extinguishers');
+                            setSelectedBuilding(bldg.name);
+                            setSelectedAssetCategory('All');
+                            setIsMobileMenuOpen(false);
+                          }}
+                          className={`p-2 rounded-lg text-xs font-bold flex items-center justify-between cursor-pointer transition-colors ${
+                            isSelected
+                              ? 'bg-blue-600 text-white font-extrabold shadow-sm'
+                              : 'bg-slate-850 text-slate-300 hover:bg-slate-800'
+                          }`}
+                        >
+                          <span className="flex items-center gap-2 truncate">
+                            <span>{bldg.icon}</span>
+                            <span className="truncate">{bldg.name}</span>
+                          </span>
+                          <span className={`text-[10px] font-mono px-1.5 py-0.5 rounded-full font-bold ${
+                            isSelected ? 'bg-blue-800 text-white' : 'bg-slate-800 text-slate-300'
+                          }`}>
+                            {stats.total}
+                          </span>
+                        </button>
+                      );
+                    })}
+                  </div>
+                )}
+              </div>
+
+              {/* 4. Inspection History */}
+              <button
+                onClick={() => {
+                  setActiveInspection(null);
+                  setCurrentTab('history');
+                  setIsMobileMenuOpen(false);
+                }}
+                className={`w-full flex items-center justify-between p-2.5 rounded-xl text-xs font-bold transition-all cursor-pointer ${
+                  currentTab === 'history'
+                    ? 'bg-red-600 text-white shadow-md'
+                    : 'bg-slate-850 hover:bg-slate-800 text-slate-200 border border-slate-800'
+                }`}
+              >
+                <div className="flex items-center gap-2.5">
+                  <History size={16} className={currentTab === 'history' ? 'text-white' : 'text-blue-400'} />
+                  <span>ประวัติการตรวจเช็คย้อนหลัง</span>
+                </div>
+                <span className="text-[10px] opacity-80 font-mono">({logs.length})</span>
+              </button>
+
+              {/* 5. User Management if Admin */}
+              {userProfile?.role === 'Admin' && (
+                <button
+                  onClick={() => {
+                    setIsMobileMenuOpen(false);
+                    setIsUserMgmtOpen(true);
+                  }}
+                  className="w-full flex items-center justify-between p-2.5 rounded-xl text-xs font-bold bg-amber-950/50 border border-amber-800/60 text-amber-300 hover:bg-amber-900/60 cursor-pointer transition-colors"
+                >
+                  <div className="flex items-center gap-2.5">
+                    <Users size={16} className="text-amber-400" />
+                    <span>จัดการผู้ใช้งาน</span>
+                  </div>
+                  <span className="text-[10px] px-2 py-0.5 rounded-md bg-amber-500 text-slate-950 font-black">Admin</span>
+                </button>
+              )}
+            </div>
+
+            {/* Quick Actions Footer inside Mobile Menu */}
+            <div className="p-3 bg-slate-950/80 flex items-center justify-between gap-2 border-t border-slate-800/60">
+              <button
+                onClick={() => {
+                  toggleTheme();
+                }}
+                className="flex-1 flex items-center justify-center gap-1.5 p-2.5 rounded-xl bg-slate-850 hover:bg-slate-800 text-slate-200 text-xs font-bold border border-slate-800 cursor-pointer transition-colors"
+              >
+                {theme === 'dark' ? (
+                  <>
+                    <Sun size={15} className="text-amber-400" />
+                    <span>โหมดสว่าง</span>
+                  </>
+                ) : (
+                  <>
+                    <Moon size={15} className="text-indigo-400" />
+                    <span>โหมดมืด</span>
+                  </>
+                )}
+              </button>
+
+              <button
+                onClick={() => {
+                  setIsMobileMenuOpen(false);
+                  setIsNotificationModalOpen(true);
+                }}
+                className="flex-1 flex items-center justify-center gap-1.5 p-2.5 rounded-xl bg-slate-850 hover:bg-slate-800 text-slate-200 text-xs font-bold border border-slate-800 cursor-pointer relative transition-colors"
+              >
+                <Bell size={15} className={expiryAlerts.length > 0 ? "text-amber-400" : "text-slate-400"} />
+                <span>แจ้งเตือน</span>
+                {expiryAlerts.length > 0 && (
+                  <span className="px-1.5 py-0.2 rounded-full bg-red-600 text-white text-[10px] font-bold">
+                    {expiryAlerts.length}
+                  </span>
+                )}
+              </button>
+
+              <button
+                onClick={() => {
+                  setIsMobileMenuOpen(false);
+                  setActiveInspection(null);
+                  setIsScannerOpen(true);
+                }}
+                className="flex-1 flex items-center justify-center gap-1.5 p-2.5 rounded-xl bg-red-600 hover:bg-red-500 text-white text-xs font-extrabold shadow-md cursor-pointer transition-colors"
+              >
+                <Scan size={15} />
+                <span>สแกน QR</span>
+              </button>
+            </div>
+          </motion.div>
+        )}
+      </AnimatePresence>
+
+      {/* Main Body Layout with Fixed Left Sidebar */}
+      <div className="flex-1 flex flex-col md:flex-row w-full max-w-[1600px] mx-auto overflow-hidden min-h-0">
+        
+        {/* Left Sidebar Navigation (Desktop only, clean and spacious) */}
+        <aside className="hidden md:flex flex-col md:w-60 lg:w-64 bg-slate-900/95 border-r border-slate-800 p-3 md:p-4 shrink-0 justify-between h-full z-30 shadow-none">
+          <div className="flex flex-col items-stretch space-y-1.5 w-full">
+            <div className="text-[10px] font-extrabold uppercase tracking-wider text-slate-500 px-3 py-1.5 hidden md:block">
+              เมนูหลักระบบ (Main Menu)
+            </div>
+
             <button
               onClick={() => {
                 setActiveInspection(null);
                 setCurrentTab('dashboard');
               }}
-              className={`flex items-center gap-2 px-4 py-2 rounded-xl text-xs font-bold transition-all cursor-pointer whitespace-nowrap ${
+              className={`flex items-center gap-2 md:gap-2.5 px-3 py-2 md:px-3.5 md:py-2.5 rounded-xl text-xs font-bold transition-all cursor-pointer whitespace-nowrap md:w-full ${
                 currentTab === 'dashboard'
-                  ? 'bg-red-950/50 text-red-400 border border-red-900/50 shadow-inner'
-                  : 'text-slate-400 hover:bg-slate-850 hover:text-slate-200 border border-transparent'
+                  ? 'bg-red-950/70 text-red-400 border border-red-900/60 shadow-inner'
+                  : 'text-slate-400 hover:bg-slate-800 hover:text-slate-200 border border-transparent'
               }`}
             >
-              <TrendingUp size={14} />
+              <TrendingUp size={16} />
               <span>แดชบอร์ดความปลอดภัย</span>
             </button>
 
-            <button
-              onClick={() => {
-                setActiveInspection(null);
-                setCurrentTab('extinguishers');
-              }}
-              className={`flex items-center gap-2 px-4 py-2 rounded-xl text-xs font-bold transition-all cursor-pointer whitespace-nowrap ${
-                currentTab === 'extinguishers'
-                  ? 'bg-red-950/50 text-red-400 border border-red-900/50 shadow-inner'
-                  : 'text-slate-400 hover:bg-slate-850 hover:text-slate-200 border border-transparent'
-              }`}
-            >
-              <Database size={14} />
-              <span>รายการถังดับเพลิง</span>
-            </button>
+            {/* รายการอุปกรณ์ Menu with Dropdown */}
+            <div className="w-full space-y-1">
+              <button
+                onClick={() => {
+                  setActiveInspection(null);
+                  setCurrentTab('extinguishers');
+                  setIsEquipmentSubmenuOpen(!isEquipmentSubmenuOpen);
+                }}
+                className={`flex items-center justify-between gap-2 px-3 py-2 md:px-3.5 md:py-2.5 rounded-xl text-xs font-bold transition-all cursor-pointer whitespace-nowrap w-full ${
+                  currentTab === 'extinguishers'
+                    ? 'bg-red-950/70 text-red-400 border border-red-900/60 shadow-inner'
+                    : 'text-slate-400 hover:bg-slate-800 hover:text-slate-200 border border-transparent'
+                }`}
+              >
+                <div className="flex items-center gap-2 md:gap-2.5">
+                  <Database size={16} />
+                  <span>รายการอุปกรณ์</span>
+                  <span className="ml-1 text-[10px] px-1.5 py-0.5 rounded-md bg-slate-800 text-slate-300 font-mono">
+                    {extinguishers.length}
+                  </span>
+                </div>
+                <ChevronDown 
+                  size={14} 
+                  className={`transition-transform duration-200 text-slate-400 ${isEquipmentSubmenuOpen ? 'rotate-180' : ''}`} 
+                />
+              </button>
+
+              {/* Submenu List */}
+              {isEquipmentSubmenuOpen && (
+                <div className="flex md:flex-col items-center md:items-stretch gap-1 pl-2 md:pl-3 mt-1 border-l-2 border-red-900/40 ml-2 md:ml-3">
+                  <button
+                    onClick={() => {
+                      setActiveInspection(null);
+                      setCurrentTab('extinguishers');
+                      setSelectedAssetCategory('All');
+                    }}
+                    className={`flex items-center justify-between px-2.5 py-1.5 rounded-lg text-xs font-bold transition-all cursor-pointer whitespace-nowrap w-full ${
+                      currentTab === 'extinguishers' && selectedAssetCategory === 'All' && selectedBuilding === 'All'
+                        ? 'bg-red-600 text-white font-extrabold shadow-xs'
+                        : 'text-slate-400 hover:bg-slate-800 hover:text-slate-200 bg-slate-950/40 md:bg-transparent border border-slate-800 md:border-0'
+                    }`}
+                  >
+                    <div className="flex items-center gap-1.5">
+                      <span className="text-xs">📋</span>
+                      <span>อุปกรณ์ทั้งหมด</span>
+                    </div>
+                    <span className="text-[10px] font-mono opacity-80 shrink-0 ml-1">({extinguishers.length})</span>
+                  </button>
+
+                  {ASSET_CATEGORIES.map((cat) => {
+                    const count = extinguishers.filter(e => getAssetCategory(e) === cat.id).length;
+                    const isSelected = currentTab === 'extinguishers' && selectedAssetCategory === cat.id;
+
+                    return (
+                      <button
+                        key={cat.id}
+                        onClick={() => {
+                          setActiveInspection(null);
+                          setCurrentTab('extinguishers');
+                          setSelectedAssetCategory(cat.id);
+                        }}
+                        className={`flex items-center justify-between px-2.5 py-1.5 rounded-lg text-xs font-bold transition-all cursor-pointer whitespace-nowrap w-full ${
+                          isSelected
+                            ? 'bg-red-600 text-white font-extrabold shadow-xs'
+                            : 'text-slate-400 hover:bg-slate-800 hover:text-slate-200 bg-slate-950/40 md:bg-transparent border border-slate-800 md:border-0'
+                        }`}
+                      >
+                        <div className="flex items-center gap-1.5 truncate">
+                          <span className="text-xs">{cat.icon}</span>
+                          <span className="truncate">{cat.name.split(' (')[0]}</span>
+                        </div>
+                        <span className="text-[10px] font-mono opacity-80 shrink-0 ml-1">({count})</span>
+                      </button>
+                    );
+                  })}
+                </div>
+              )}
+            </div>
+
+            {/* รายการอาคารและสถานที่ (Hospital Buildings Menu) */}
+            <div className="w-full space-y-1">
+              <button
+                onClick={() => {
+                  setIsBuildingSubmenuOpen(!isBuildingSubmenuOpen);
+                }}
+                className={`flex items-center justify-between gap-2 px-3 py-2 md:px-3.5 md:py-2.5 rounded-xl text-xs font-bold transition-all cursor-pointer whitespace-nowrap w-full ${
+                  currentTab === 'extinguishers' && selectedBuilding !== 'All'
+                    ? 'bg-blue-950/70 text-blue-400 border border-blue-900/60 shadow-inner'
+                    : 'text-slate-400 hover:bg-slate-800 hover:text-slate-200 border border-transparent'
+                }`}
+              >
+                <div className="flex items-center gap-2 md:gap-2.5">
+                  <Building2 size={16} className="text-blue-400" />
+                  <span>แยกตามอาคาร ({HOSPITAL_BUILDINGS.length})</span>
+                </div>
+                <ChevronDown 
+                  size={14} 
+                  className={`transition-transform duration-200 text-slate-400 ${isBuildingSubmenuOpen ? 'rotate-180' : ''}`} 
+                />
+              </button>
+
+              {/* Buildings Submenu List */}
+              {isBuildingSubmenuOpen && (
+                <div className="flex md:flex-col items-center md:items-stretch gap-1 pl-2 md:pl-3 mt-1 border-l-2 border-blue-900/40 ml-2 md:ml-3">
+                  {HOSPITAL_BUILDINGS.map((bldg) => {
+                    const stats = getBuildingEquipmentStats(extinguishers, bldg.name);
+                    const isSelected = currentTab === 'extinguishers' && selectedBuilding === bldg.name;
+
+                    return (
+                      <button
+                        key={bldg.id}
+                        onClick={() => {
+                          setActiveInspection(null);
+                          setCurrentTab('extinguishers');
+                          setSelectedBuilding(bldg.name);
+                          setSelectedAssetCategory('All');
+                        }}
+                        className={`flex items-center justify-between px-2.5 py-2 rounded-lg text-xs font-bold transition-all cursor-pointer whitespace-nowrap w-full ${
+                          isSelected
+                            ? 'bg-blue-600 text-white font-extrabold shadow-sm'
+                            : 'text-slate-400 hover:bg-slate-800 hover:text-slate-200 bg-slate-950/40 md:bg-transparent border border-slate-800 md:border-0'
+                        }`}
+                      >
+                        <div className="flex items-center gap-2 truncate">
+                          <span className="text-sm">{bldg.icon}</span>
+                          <span className="truncate">{bldg.name}</span>
+                        </div>
+                        <span className={`text-[10px] font-mono px-1.5 py-0.5 rounded-full font-bold ml-1.5 ${
+                          isSelected 
+                            ? 'bg-blue-800 text-white' 
+                            : stats.total > 0 
+                              ? 'bg-blue-950 text-blue-300 border border-blue-800/60' 
+                              : 'bg-slate-800 text-slate-500'
+                        }`}>
+                          {stats.total}
+                        </span>
+                      </button>
+                    );
+                  })}
+                </div>
+              )}
+            </div>
 
             <button
               onClick={() => {
                 setActiveInspection(null);
                 setCurrentTab('history');
               }}
-              className={`flex items-center gap-2 px-4 py-2 rounded-xl text-xs font-bold transition-all cursor-pointer whitespace-nowrap ${
+              className={`flex items-center gap-2 md:gap-2.5 px-3 py-2 md:px-3.5 md:py-2.5 rounded-xl text-xs font-bold transition-all cursor-pointer whitespace-nowrap md:w-full ${
                 currentTab === 'history'
-                  ? 'bg-red-950/50 text-red-400 border border-red-900/50 shadow-inner'
-                  : 'text-slate-400 hover:bg-slate-850 hover:text-slate-200 border border-transparent'
+                  ? 'bg-red-950/70 text-red-400 border border-red-900/60 shadow-inner'
+                  : 'text-slate-400 hover:bg-slate-800 hover:text-slate-200 border border-transparent'
               }`}
             >
-              <History size={14} />
+              <History size={16} />
               <span>ประวัติการตรวจเช็ค</span>
             </button>
-          </div>
-          
-          {/* Quick status message */}
-          <div className="hidden lg:flex items-center gap-2 text-[10px] text-slate-450 uppercase font-extrabold tracking-wider border-l border-slate-800 pl-4 py-1">
-            <div className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-ping"></div>
-            <span>ซิงค์สดผ่านคลาวด์</span>
-          </div>
-        </div>
-      </div>
 
-      {/* Main Container */}
-      <main className="flex-1 w-full max-w-7xl mx-auto p-4 md:p-6 space-y-6">
+            {userProfile?.role === 'Admin' && (
+              <button
+                onClick={() => setIsUserMgmtOpen(true)}
+                className="flex items-center gap-2 md:gap-2.5 px-3 py-2 md:px-3.5 md:py-2.5 rounded-xl text-xs font-bold transition-all cursor-pointer whitespace-nowrap md:w-full text-amber-400 bg-amber-950/40 border border-amber-800/60 hover:bg-amber-900/60"
+              >
+                <Users size={16} className="text-amber-400" />
+                <span>จัดการผู้ใช้</span>
+              </button>
+            )}
+
+            {/* Theme Toggle Button in Sidebar */}
+            <button
+              onClick={toggleTheme}
+              className="flex items-center gap-2 md:gap-2.5 px-3 py-2 md:px-3.5 md:py-2.5 rounded-xl text-xs font-bold transition-all cursor-pointer whitespace-nowrap md:w-full text-slate-400 hover:text-slate-200 hover:bg-slate-800 border border-transparent"
+              title={theme === 'dark' ? 'เปลี่ยนเป็นโหมดสว่าง' : 'เปลี่ยนเป็นโหมดมืด'}
+            >
+              {theme === 'dark' ? (
+                <>
+                  <Sun size={16} className="text-amber-400" />
+                  <span>โหมดสว่าง (Light Mode)</span>
+                </>
+              ) : (
+                <>
+                  <Moon size={16} className="text-indigo-400" />
+                  <span>โหมดมืด (Dark Mode)</span>
+                </>
+              )}
+            </button>
+          </div>
+
+          {/* Logout button in Sidebar - Desktop */}
+          {user && (
+            <div className="pt-3 mt-3 border-t border-slate-800">
+              <button
+                onClick={() => signOut(auth)}
+                className="w-full flex items-center gap-2.5 px-3.5 py-2.5 rounded-xl text-xs font-bold transition-all cursor-pointer text-slate-400 hover:text-red-400 hover:bg-red-950/30 border border-slate-800 hover:border-red-900/50"
+                title="ออกจากระบบ"
+              >
+                <LogOut size={16} />
+                <span>ออกจากระบบ</span>
+              </button>
+            </div>
+          )}
+        </aside>
+
+        {/* Main Content Workspace (Scrollable) */}
+        <main className="flex-1 p-4 md:p-6 space-y-6 min-w-0 overflow-y-auto h-full">
         
+        {/* Automatic Expiry Alert Banner */}
+        {!dismissBanner && expiryAlerts.length > 0 && (
+          <ExpiryAlertBanner
+            alerts={expiryAlerts}
+            onViewAlerts={() => {
+              setSelectedStatusFilter('ใกล้หมดอายุ');
+              setCurrentTab('extinguishers');
+            }}
+            onDismiss={() => setDismissBanner(true)}
+            soundEnabled={soundEnabled}
+            onToggleSound={() => setSoundEnabled(!soundEnabled)}
+            onRequestNotificationPermission={handleRequestNotificationPermission}
+            hasNotificationPermission={hasNotificationPermission}
+          />
+        )}
+
         {/* Loading Spinner */}
         {loading && extinguishers.length === 0 ? (
           <div className="flex flex-col items-center justify-center py-24 space-y-3">
@@ -516,7 +1130,7 @@ export default function App() {
                           filteredLogs.map(log => (
                             <div key={log.inspectionId} className="p-2.5 bg-slate-50 rounded-xl border border-slate-200/60 flex items-center justify-between text-[11px]">
                               <div>
-                                <p className="font-bold text-slate-800">{log.inspectorName}</p>
+                                <p className="font-bold text-slate-800">{cleanInspectorName(log.inspectorName)}</p>
                                 <p className="text-[9px] text-slate-400 font-mono mt-0.5">
                                   {new Date(log.inspectionDate).toLocaleDateString('th-TH', {
                                     year: 'numeric',
@@ -561,14 +1175,30 @@ export default function App() {
                     {/* Interactive Stats Grid */}
                     <DashboardStats 
                       extinguishers={extinguishers}
-                      onSelectStatus={handleSelectStatusFilter}
+                      selectedCategory={dashboardCategory}
+                      onSelectCategory={(cat) => setDashboardCategory(cat)}
                       selectedStatus={selectedStatusFilter}
+                      onSelectStatus={handleSelectStatusFilter}
+                      onNavigateToInventory={(cat, status) => {
+                        setActiveInspection(null);
+                        setSelectedAssetCategory(cat === 'All' ? 'ถังดับเพลิง' : cat);
+                        setSelectedStatusFilter(status || null);
+                        setCurrentTab('extinguishers');
+                      }}
                     />
 
                     {/* Dashboard Analytics & Charts */}
                     <DashboardCharts 
                       extinguishers={extinguishers}
                       logs={logs}
+                      selectedCategory={dashboardCategory}
+                      onSelectCategory={(cat) => setDashboardCategory(cat)}
+                      onNavigateToInventory={(cat, status) => {
+                        setActiveInspection(null);
+                        setSelectedAssetCategory(cat === 'All' ? 'ถังดับเพลิง' : cat);
+                        setSelectedStatusFilter(status || null);
+                        setCurrentTab('extinguishers');
+                      }}
                     />
                   </motion.div>
                 )}
@@ -591,6 +1221,10 @@ export default function App() {
                           extinguishers={extinguishers}
                           selectedId={selectedId}
                           selectedStatusFilter={selectedStatusFilter}
+                          selectedAssetCategory={selectedAssetCategory}
+                          selectedBuilding={selectedBuilding}
+                          onSelectAssetCategory={(cat) => setSelectedAssetCategory(cat)}
+                          onSelectBuilding={(bldg) => setSelectedBuilding(bldg)}
                           onSelectExtinguisher={(id) => {
                             setSelectedId(id || null);
                             // Clear other active forms when changing extinguisher selection
@@ -618,20 +1252,11 @@ export default function App() {
                           />
                         </div>
 
-                        {/* Safety Quick Guide card */}
-                        {selectedExtinguisher && (
-                          <div id="safety-checklist-guide-card" className="bg-slate-900 text-slate-100 p-5 rounded-xl border border-slate-800 flex items-start gap-3 shadow-lg">
-                            <HelpCircle className="text-red-500 shrink-0 mt-0.5" size={16} />
-                            <div>
-                              <p className="text-xs font-bold text-white uppercase tracking-wider">
-                                แนวทางการเช็คถังดับเพลิงเบื้องต้น
-                              </p>
-                              <p className="text-[11px] text-slate-400 mt-1.5 leading-relaxed">
-                                ตรวจสอบเกจวัดแรงดันทุกเดือน เข็มจะต้องอยู่ในแถบสีเขียวเสมอ สลักซีลนิรภัยไม่สูญหายหรือขาด ตัวถังภายนอกปราศจากสนิม คราบน้ำมัน หรือรอยบุบร้าว และสายฉีดสะอาดไม่มีรอยแยกหรืออุดตัน
-                              </p>
-                            </div>
-                          </div>
-                        )}
+                        {/* Dynamic Safety Quick Guide card matching equipment category */}
+                        <SafetyGuidelineCard 
+                          extinguisher={selectedExtinguisher}
+                          selectedAssetCategory={selectedAssetCategory}
+                        />
                       </div>
 
                     </div>
@@ -657,6 +1282,7 @@ export default function App() {
           </AnimatePresence>
         )}
       </main>
+      </div>
 
       {/* Professional QR Scanner Modal Overlay */}
       <AnimatePresence>
@@ -699,6 +1325,50 @@ export default function App() {
           </motion.div>
         )}
       </AnimatePresence>
+
+      {/* Admin User Management Modal */}
+      <AnimatePresence>
+        {isUserMgmtOpen && (
+          <UserManagementModal
+            currentUserEmail={user?.email || 'Admin'}
+            onClose={() => setIsUserMgmtOpen(false)}
+          />
+        )}
+      </AnimatePresence>
+
+      {/* Auto Notification Center Modal */}
+      <NotificationCenterModal
+        isOpen={isNotificationModalOpen}
+        onClose={() => setIsNotificationModalOpen(false)}
+        alerts={expiryAlerts}
+        allExtinguishers={extinguishers}
+        onSelectExtinguisher={(id) => {
+          setSelectedId(id);
+          setCurrentTab('extinguishers');
+        }}
+        onInspectExtinguisher={(ext) => {
+          setActiveInspection(ext);
+        }}
+        soundEnabled={soundEnabled}
+        onToggleSound={() => setSoundEnabled(!soundEnabled)}
+        onRequestNotificationPermission={handleRequestNotificationPermission}
+        hasNotificationPermission={hasNotificationPermission}
+      />
+
+      {/* Floating QR Code Scanner Action Button for Mobile & Tablet */}
+      <div className="fixed bottom-14 right-4 z-40 md:hidden">
+        <button
+          onClick={() => {
+            setActiveInspection(null);
+            setIsScannerOpen(true);
+          }}
+          className="bg-red-600 hover:bg-red-500 text-white px-4 py-3 rounded-full shadow-2xl shadow-red-900/80 flex items-center gap-2 border-2 border-red-400/80 cursor-pointer active:scale-95 transition-transform"
+          title="สแกน QR Code"
+        >
+          <Scan size={20} className="animate-pulse shrink-0" />
+          <span className="text-xs font-black tracking-wide">สแกน QR</span>
+        </button>
+      </div>
 
       {/* Footer */}
       <footer className="h-11 bg-slate-900 border-t border-slate-800 flex items-center justify-between px-6 shrink-0 text-[10px] font-semibold text-slate-400 uppercase tracking-widest mt-auto">

@@ -1,6 +1,6 @@
 import React, { useState, useRef, useEffect } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
-import { Camera, AlertCircle, Scan, X, KeyRound, Search, HelpCircle, CheckCircle2 } from 'lucide-react';
+import { Camera, AlertCircle, Scan, X, KeyRound, Search, Upload, CheckCircle2 } from 'lucide-react';
 import { Html5Qrcode } from 'html5-qrcode';
 import { FireExtinguisher } from '../types';
 
@@ -13,14 +13,28 @@ interface QRScannerProps {
 export default function QRScanner({ extinguishers, onScanSuccess, onClose }: QRScannerProps) {
   const [manualCode, setManualCode] = useState('');
   const [cameraError, setCameraError] = useState<string | null>(null);
-  const [isCameraActive, setIsCameraActive] = useState(false);
+  
+  // Auto-activate camera if running in standalone window tab (not inside iframe) or if opened with ?scan=true
+  const isStandalone = typeof window !== 'undefined' && window.self === window.top;
+  const isScanParam = typeof window !== 'undefined' && new URLSearchParams(window.location.search).get('scan') === 'true';
+  const [isCameraActive, setIsCameraActive] = useState(isStandalone || isScanParam);
+  
   const [scanSuccessText, setScanSuccessText] = useState<string | null>(null);
   const [inputError, setInputError] = useState<string | null>(null);
+  const [isProcessingFile, setIsProcessingFile] = useState(false);
   
   const qrScannerRef = useRef<Html5Qrcode | null>(null);
-  const readerId = "qr-reader-container-element";
+  const fileInputRef = useRef<HTMLInputElement | null>(null);
+  const readerId = "qr-reader-container-clean";
 
-  // Play a beautiful beep sound when scanning is successful
+  // Open app in new standalone browser tab with auto-open QR scanner parameter
+  const openNewTabWithScan = () => {
+    const url = new URL(window.location.href);
+    url.searchParams.set('scan', 'true');
+    window.open(url.toString(), '_blank');
+  };
+
+  // Play a beep sound when scanning is successful
   const playBeep = () => {
     try {
       const context = new (window.AudioContext || (window as any).webkitAudioContext)();
@@ -30,7 +44,7 @@ export default function QRScanner({ extinguishers, onScanSuccess, onClose }: QRS
       oscillator.connect(gainNode);
       gainNode.connect(context.destination);
       
-      oscillator.frequency.setValueAtTime(1200, context.currentTime); // High pitch beep
+      oscillator.frequency.setValueAtTime(1200, context.currentTime);
       gainNode.gain.setValueAtTime(0.1, context.currentTime);
       
       oscillator.start();
@@ -46,8 +60,12 @@ export default function QRScanner({ extinguishers, onScanSuccess, onClose }: QRS
     setScanSuccessText(cleanId);
     
     // Stop scanner if active
-    if (qrScannerRef.current && qrScannerRef.current.isScanning) {
-      qrScannerRef.current.stop().catch(err => console.error("Error stopping scanner:", err));
+    if (qrScannerRef.current) {
+      try {
+        if (qrScannerRef.current.isScanning) {
+          qrScannerRef.current.stop().catch(() => {});
+        }
+      } catch (_) {}
     }
 
     setTimeout(() => {
@@ -76,18 +94,55 @@ export default function QRScanner({ extinguishers, onScanSuccess, onClose }: QRS
     handleSuccess(cleanId);
   };
 
-  // Start QR scanner using html5-qrcode
+  // Scan QR code from photo upload / phone camera photo capture
+  const handleFileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+
+    setIsProcessingFile(true);
+    setCameraError(null);
+    setInputError(null);
+
+    try {
+      const html5QrCode = new Html5Qrcode("qr-file-scanner-temp");
+      const result = await html5QrCode.scanFile(file, true);
+      handleSuccess(result);
+    } catch (err: any) {
+      console.warn("QR file scan failed:", err);
+      setInputError("ไม่พบ QR Code ในรูปภาพนี้ กรุณาลองถ่ายภาพใหม่ให้ชัดเจน หรือพิมพ์รหัสถังด้านล่าง");
+    } finally {
+      setIsProcessingFile(false);
+      if (fileInputRef.current) {
+        fileInputRef.current.value = '';
+      }
+    }
+  };
+
+  // Start QR scanner using html5-qrcode safely
   useEffect(() => {
+    let isMounted = true;
+
     if (isCameraActive) {
       setCameraError(null);
       
-      // Delay initialization slightly to ensure container is fully rendered in the DOM
-      const timer = setTimeout(() => {
+      const timer = setTimeout(async () => {
         try {
+          const element = document.getElementById(readerId);
+          if (!element || !isMounted) return;
+
+          // Check if camera API exists
+          if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+            if (isMounted) {
+              setCameraError("บราวเซอร์หรือสภาพแวดล้อมระบบไม่อนุญาตให้เปิดกล้องสด (สามารถถ่ายภาพ QR Code หรือกรอกรหัสถังด้านล่างได้)");
+              setIsCameraActive(false);
+            }
+            return;
+          }
+
           const html5QrCode = new Html5Qrcode(readerId);
           qrScannerRef.current = html5QrCode;
 
-          html5QrCode.start(
+          await html5QrCode.start(
             { facingMode: "environment" },
             {
               fps: 15,
@@ -97,27 +152,36 @@ export default function QRScanner({ extinguishers, onScanSuccess, onClose }: QRS
               }
             },
             (decodedText) => {
-              handleSuccess(decodedText);
+              if (isMounted) {
+                handleSuccess(decodedText);
+              }
             },
-            (errorMessage) => {
-              // Verbose scan failure log (ignored to avoid spam)
-            }
-          ).catch((err) => {
-            console.error("Camera scan start error:", err);
-            setCameraError("ไม่สามารถเปิดกล้องได้ (อาจเกิดจากการจำกัดสิทธิ์ใน iframe หรือไม่ได้อนุญาตการใช้กล้อง)");
+            () => {}
+          );
+        } catch (err: any) {
+          console.warn("Camera scan start error:", err);
+          if (isMounted) {
+            setCameraError("ไม่สามารถเปิดสตรีมกล้องสดได้ (โปรดใช้ปุ่ม 'ถ่ายภาพ/อัปโหลดรูป QR Code' หรือกรอกรหัสถังดับเพลิงด้านล่าง)");
             setIsCameraActive(false);
-          });
-        } catch (err) {
-          console.error("Html5Qrcode initialization error:", err);
-          setCameraError("อุปกรณ์นี้ไม่รองรับการสแกนผ่านเว็บบราวเซอร์");
-          setIsCameraActive(false);
+          }
         }
       }, 300);
 
       return () => {
+        isMounted = false;
         clearTimeout(timer);
-        if (qrScannerRef.current && qrScannerRef.current.isScanning) {
-          qrScannerRef.current.stop().catch(err => console.error("Error stopping scanner during unmount:", err));
+        if (qrScannerRef.current) {
+          const scannerInstance = qrScannerRef.current;
+          qrScannerRef.current = null;
+          try {
+            if (scannerInstance.isScanning) {
+              scannerInstance.stop().catch(() => {}).finally(() => {
+                try { scannerInstance.clear(); } catch (_) {}
+              });
+            } else {
+              try { scannerInstance.clear(); } catch (_) {}
+            }
+          } catch (_) {}
         }
       };
     }
@@ -130,6 +194,17 @@ export default function QRScanner({ extinguishers, onScanSuccess, onClose }: QRS
       exit={{ opacity: 0, scale: 0.95 }}
       className="bg-slate-900 text-white rounded-2xl border border-slate-800 overflow-hidden shadow-2xl flex flex-col h-full"
     >
+      {/* Hidden element for file scanning */}
+      <div id="qr-file-scanner-temp" className="hidden"></div>
+      <input
+        type="file"
+        ref={fileInputRef}
+        onChange={handleFileUpload}
+        accept="image/*"
+        capture="environment"
+        className="hidden"
+      />
+
       {/* Header */}
       <div id="scanner-header" className="p-4.5 bg-slate-950 border-b border-slate-800 flex justify-between items-center">
         <div className="flex items-center gap-2">
@@ -147,8 +222,11 @@ export default function QRScanner({ extinguishers, onScanSuccess, onClose }: QRS
       <div id="scanner-viewfinder" className="relative bg-black h-72 flex flex-col items-center justify-center overflow-hidden border-b border-slate-800">
         
         {isCameraActive ? (
-          <div id={readerId} className="w-full h-full object-cover relative">
-            {/* Viewfinder Overlay Grid */}
+          <div className="relative w-full h-full">
+            {/* CLEAN EMPTY DIV FOR HTML5QRCODE TO PREVENT REACT DOM RECONCILIATION CRASH */}
+            <div id={readerId} className="w-full h-full object-cover"></div>
+
+            {/* Viewfinder Overlay Grid (Rendered outside the reader element) */}
             <div className="absolute inset-0 pointer-events-none flex items-center justify-center z-10">
               <div className="w-48 h-48 border-2 border-dashed border-red-500/80 rounded-2xl relative">
                 {/* Corners */}
@@ -175,17 +253,35 @@ export default function QRScanner({ extinguishers, onScanSuccess, onClose }: QRS
         ) : (
           <div className="absolute inset-0 bg-slate-950 flex flex-col items-center justify-center p-6 text-center">
             <Camera size={38} className="text-slate-600 mb-3" />
-            <p className="text-xs text-slate-300 font-bold">โหมดสแกนผ่านกล้องถ่ายภาพ</p>
+            <p className="text-xs text-slate-300 font-bold">โหมดสแกนคิวอาร์โค้ด</p>
             <p className="text-[10px] text-slate-500 max-w-xs leading-relaxed mt-1">
-              เปิดสิทธิ์กล้องเพื่อเปิดการทำงานสแกน QR Code ตรวจสอบถังดับเพลิงประจำจุดติดตั้งโดยตรง
+              เลือกสแกนสดผ่านกล้อง หรือ ถ่ายภาพ/อัปโหลดรูป QR Code จากมือถือได้โดยตรง
             </p>
-            <button
-              onClick={() => setIsCameraActive(true)}
-              className="mt-4 bg-red-600 hover:bg-red-500 text-white font-bold text-[11px] py-2 px-5 rounded-lg transition-colors cursor-pointer shadow-md flex items-center gap-1.5"
-            >
-              <Camera size={13} />
-              <span>เปิดสิทธิ์สแกนผ่านกล้องจริง</span>
-            </button>
+            
+            <div className="flex flex-wrap justify-center gap-2 mt-4">
+              <button
+                type="button"
+                onClick={() => setIsCameraActive(true)}
+                className="bg-red-600 hover:bg-red-500 text-white font-bold text-[11px] py-2 px-4 rounded-lg transition-colors cursor-pointer shadow-md flex items-center gap-1.5"
+              >
+                <Camera size={13} />
+                <span>เปิดสแกนผ่านกล้องสด</span>
+              </button>
+
+              <button
+                type="button"
+                onClick={() => fileInputRef.current?.click()}
+                disabled={isProcessingFile}
+                className="bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700 font-bold text-[11px] py-2 px-4 rounded-lg transition-colors cursor-pointer shadow-md flex items-center gap-1.5"
+              >
+                {isProcessingFile ? (
+                  <span className="w-3.5 h-3.5 border-2 border-white border-t-transparent rounded-full animate-spin"></span>
+                ) : (
+                  <Upload size={13} />
+                )}
+                <span>ถ่ายภาพ / เลือกรูป QR Code</span>
+              </button>
+            </div>
           </div>
         )}
 
@@ -206,28 +302,50 @@ export default function QRScanner({ extinguishers, onScanSuccess, onClose }: QRS
 
         {/* Camera error notification */}
         {cameraError && (
-          <div className="absolute bottom-4 left-4 right-4 bg-red-950/95 text-red-200 border border-red-900/40 p-3 rounded-xl flex items-start gap-2 text-[11px] z-10 shadow-lg">
-            <AlertCircle size={15} className="shrink-0 mt-0.5" />
-            <div className="space-y-0.5">
-              <p className="font-bold">ไม่สามารถเข้าถึงอุปกรณ์กล้องได้</p>
-              <p className="text-[10px] text-red-300">กรุณาใช้วิธีป้อนรหัสถังดับเพลิงที่ติดตั้งด้วยตนเองด้านล่างแทน</p>
+          <div className="absolute bottom-3 left-3 right-3 bg-red-950/95 text-red-200 border border-red-800/60 p-3 rounded-xl flex items-start gap-2.5 text-[11px] z-10 shadow-xl backdrop-blur-xs">
+            <AlertCircle size={16} className="shrink-0 mt-0.5 text-red-400" />
+            <div className="space-y-1 text-left w-full">
+              <p className="font-bold text-red-300 flex items-center justify-between">
+                <span>แจ้งเตือนสิทธิ์การใช้งานกล้อง</span>
+                <span className="text-[9px] bg-red-900/60 px-1.5 py-0.5 rounded text-red-200">ข้อจำกัด iFrame Preview</span>
+              </p>
+              <p className="text-[10px] text-red-200 leading-relaxed">
+                เนื่องจากหน้านี้ทำงานอยู่ในระบบ Preview เบราว์เซอร์จึงไม่อนุญาตให้เปิดสตรีมวิดีโอกล้องสดใน iframe
+              </p>
+              <div className="pt-1 flex flex-wrap gap-2">
+                <button
+                  type="button"
+                  onClick={openNewTabWithScan}
+                  className="bg-red-600 hover:bg-red-500 text-white font-bold text-[10px] px-2.5 py-1 rounded shadow-xs cursor-pointer"
+                >
+                  เปิดแอปในแท็บใหม่ (เปิดกล้องสแกนสดได้ทันที)
+                </button>
+                <button
+                  type="button"
+                  onClick={() => fileInputRef.current?.click()}
+                  className="bg-slate-800 hover:bg-slate-700 text-slate-200 font-bold text-[10px] px-2.5 py-1 rounded border border-slate-700 cursor-pointer"
+                >
+                  ถ่ายภาพ / อัปโหลด QR
+                </button>
+              </div>
             </div>
           </div>
         )}
 
         {isCameraActive && (
           <button
+            type="button"
             onClick={() => setIsCameraActive(false)}
-            className="absolute top-4 right-4 bg-black/60 hover:bg-black/80 text-white text-[10px] py-1 px-3 rounded border border-slate-800 font-bold transition-colors z-20"
+            className="absolute top-4 right-4 bg-black/70 hover:bg-black/90 text-white text-[10px] py-1 px-3 rounded border border-slate-700 font-bold transition-colors z-20 cursor-pointer"
           >
-            ปิดกล้อง
+            ปิดกล้องสด
           </button>
         )}
       </div>
 
       {/* Clean Manual Form (Production Style fallback) */}
       <div className="p-5 bg-slate-950 flex-1 flex flex-col justify-between">
-        <form onSubmit={handleManualSubmit} className="space-y-3.5">
+        <form onSubmit={handleManualSubmit} className="space-y-3">
           <div>
             <label className="text-[10px] font-bold tracking-wider text-slate-400 uppercase flex items-center gap-1">
               <KeyRound size={12} className="text-red-500" />
@@ -261,23 +379,16 @@ export default function QRScanner({ extinguishers, onScanSuccess, onClose }: QRS
           </div>
 
           {inputError && (
-            <motion.div
-              initial={{ opacity: 0, y: -5 }}
-              animate={{ opacity: 1, y: 0 }}
-              className="bg-rose-950/60 text-rose-300 border border-rose-900/40 p-2.5 rounded-lg flex items-center gap-1.5 text-[10px] font-semibold"
-            >
-              <AlertCircle size={13} className="shrink-0" />
+            <p className="text-[11px] text-rose-400 font-medium flex items-center gap-1 pt-1">
+              <AlertCircle size={12} />
               <span>{inputError}</span>
-            </motion.div>
+            </p>
           )}
         </form>
 
-        {/* Safety Note */}
-        <div className="border-t border-slate-900/80 pt-4 mt-4 flex items-start gap-2.5 text-[10px] text-slate-500 leading-normal">
-          <HelpCircle size={14} className="text-slate-650 shrink-0 mt-0.5" />
-          <p>
-            การสแกนหรือยืนยันรหัสถังมีความสำคัญต่อมาตรฐาน NFPA 10 เพื่อพิสูจน์ว่าผู้ตรวจเช็คได้เดินทางมาตรวจสอบหน้างาน ณ จุดติดตั้งจริง ไม่ใช่การประเมินจากระยะไกล
-          </p>
+        <div className="mt-4 pt-3 border-t border-slate-900 flex items-center justify-between text-[10px] text-slate-500">
+          <span>รองรับการสแกนป้ายมาตรฐาน NFPA 10</span>
+          <span>ระบบบันทึกเวลาอัตโนมัติ</span>
         </div>
       </div>
     </motion.div>

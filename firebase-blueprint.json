@@ -7,7 +7,12 @@
       "properties": {
         "id": {
           "type": "string",
-          "description": "The unique serial/ID of the extinguisher"
+          "description": "The unique serial/ID of the extinguisher or asset"
+        },
+        "assetType": {
+          "type": "string",
+          "enum": ["ถังดับเพลิง", "ตู้ดับเพลิง", "ประตูกันไฟ"],
+          "description": "Type of safety asset"
         },
         "type": {
           "type": "string",

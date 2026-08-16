@@ -21,35 +21,50 @@ function getYearMonthFromDate(dateStr: string): string {
 }
 
 /**
- * Upload profile photo for fire extinguisher
- * Path: /fire_protection_system/extinguishers/{feId}_profile.jpg
+ * Upload a single base64 image to Firebase Storage with timeout fallback
  */
-export async function uploadExtinguisherProfilePhoto(feId: string, base64Data: string): Promise<string> {
+async function uploadImageWithTimeout(
+  path: string,
+  base64Data: string,
+  timeoutMs = 4000
+): Promise<string> {
   if (!base64Data || !base64Data.startsWith('data:image/')) {
-    // If empty or already a HTTP URL, return as-is
     return base64Data;
   }
 
-  try {
-    const path = `fire_protection_system/extinguishers/${feId}_profile.jpg`;
+  const uploadTask = (async () => {
     const storageRef = ref(storage, path);
-    
-    // Upload base64 string
     await uploadString(storageRef, base64Data, 'data_url');
-    
-    // Get and return download URL
-    const downloadUrl = await getDownloadURL(storageRef);
-    console.log(`[Storage] Uploaded profile photo for ${feId} to ${path}`);
-    return downloadUrl;
+    return await getDownloadURL(storageRef);
+  })();
+
+  const timeoutTask = new Promise<string>((_, reject) =>
+    setTimeout(() => reject(new Error('Storage upload timed out')), timeoutMs)
+  );
+
+  try {
+    return await Promise.race([uploadTask, timeoutTask]);
   } catch (error) {
-    console.warn(`[Storage Warning] Failed to upload profile photo to Firebase Storage. Falling back to inline Base64 storage.`, error);
-    // Return original base64 as fallback so the app does not break
+    console.warn(`[Storage Warning] Skipped or fallback for ${path}:`, error);
     return base64Data;
   }
 }
 
 /**
- * Upload inspection photos and digital signature
+ * Upload profile photo for fire extinguisher
+ * Path: /fire_protection_system/extinguishers/{feId}_profile.jpg
+ */
+export async function uploadExtinguisherProfilePhoto(feId: string, base64Data: string): Promise<string> {
+  if (!base64Data || !base64Data.startsWith('data:image/')) {
+    return base64Data;
+  }
+  const cleanId = feId.replace(/\//g, '_');
+  const path = `fire_protection_system/extinguishers/${cleanId}_profile.jpg`;
+  return await uploadImageWithTimeout(path, base64Data, 4000);
+}
+
+/**
+ * Upload inspection photos and digital signature concurrently with fast timeout
  * Paths:
  * - /fire_protection_system/inspections/{feId}/{yearMonth}_before.jpg
  * - /fire_protection_system/inspections/{feId}/{yearMonth}_after.jpg
@@ -62,54 +77,33 @@ export async function uploadInspectionPhotosAndSignature(
   afterBase64: string,
   signatureBase64: string
 ): Promise<{ beforeUrl: string; afterUrl: string; signatureUrl: string }> {
-  const result = {
-    beforeUrl: beforeBase64,
-    afterUrl: afterBase64,
-    signatureUrl: signatureBase64,
-  };
-
   const yearMonth = getYearMonthFromDate(dateStr);
+  const cleanFeId = feId.replace(/\//g, '_');
 
-  // 1. Upload Before Photo
-  if (beforeBase64 && beforeBase64.startsWith('data:image/')) {
-    try {
-      const path = `fire_protection_system/inspections/${feId}/${yearMonth}_before.jpg`;
-      const storageRef = ref(storage, path);
-      await uploadString(storageRef, beforeBase64, 'data_url');
-      result.beforeUrl = await getDownloadURL(storageRef);
-      console.log(`[Storage] Uploaded before photo to ${path}`);
-    } catch (error) {
-      console.warn('[Storage Warning] Failed to upload before photo.', error);
-    }
-  }
+  const beforeTask = uploadImageWithTimeout(
+    `fire_protection_system/inspections/${cleanFeId}/${yearMonth}_before.jpg`,
+    beforeBase64,
+    4000
+  );
 
-  // 2. Upload After Photo
-  if (afterBase64 && afterBase64.startsWith('data:image/')) {
-    try {
-      const path = `fire_protection_system/inspections/${feId}/${yearMonth}_after.jpg`;
-      const storageRef = ref(storage, path);
-      await uploadString(storageRef, afterBase64, 'data_url');
-      result.afterUrl = await getDownloadURL(storageRef);
-      console.log(`[Storage] Uploaded after photo to ${path}`);
-    } catch (error) {
-      console.warn('[Storage Warning] Failed to upload after photo.', error);
-    }
-  }
+  const afterTask = uploadImageWithTimeout(
+    `fire_protection_system/inspections/${cleanFeId}/${yearMonth}_after.jpg`,
+    afterBase64,
+    4000
+  );
 
-  // 3. Upload Digital Signature
-  if (signatureBase64 && signatureBase64.startsWith('data:image/')) {
-    try {
-      // Determine file extension (usually base64 is image/png for signature pad)
-      const extension = signatureBase64.includes('image/png') ? 'png' : 'jpg';
-      const path = `fire_protection_system/inspections/${feId}/${yearMonth}_signature.${extension}`;
-      const storageRef = ref(storage, path);
-      await uploadString(storageRef, signatureBase64, 'data_url');
-      result.signatureUrl = await getDownloadURL(storageRef);
-      console.log(`[Storage] Uploaded signature to ${path}`);
-    } catch (error) {
-      console.warn('[Storage Warning] Failed to upload signature.', error);
-    }
-  }
+  const ext = signatureBase64.includes('image/png') ? 'png' : 'jpg';
+  const signatureTask = uploadImageWithTimeout(
+    `fire_protection_system/inspections/${cleanFeId}/${yearMonth}_signature.${ext}`,
+    signatureBase64,
+    4000
+  );
 
-  return result;
+  const [beforeUrl, afterUrl, signatureUrl] = await Promise.all([
+    beforeTask,
+    afterTask,
+    signatureTask
+  ]);
+
+  return { beforeUrl, afterUrl, signatureUrl };
 }

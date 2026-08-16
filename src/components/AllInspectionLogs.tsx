@@ -16,9 +16,11 @@ import {
   Download,
   Building2,
   BookmarkCheck,
-  FileSpreadsheet
+  FileSpreadsheet,
+  FileText
 } from 'lucide-react';
 import { InspectionLog, FireExtinguisher } from '../types';
+import { exportInspectionLogsToExcel, exportInspectionLogsToPDF, cleanInspectorName } from '../lib/exportUtils';
 
 interface AllInspectionLogsProps {
   logs: InspectionLog[];
@@ -123,14 +125,27 @@ export default function AllInspectionLogs({ logs, extinguishers }: AllInspection
             </p>
           </div>
 
-          <button
-            onClick={handleExportCSV}
-            disabled={filteredLogs.length === 0}
-            className="self-start sm:self-center py-1.5 px-3.5 bg-slate-950 hover:bg-slate-850 disabled:bg-slate-900 disabled:text-slate-600 disabled:border-slate-850 text-slate-300 text-xs font-bold rounded-lg transition-colors flex items-center gap-1.5 cursor-pointer border border-slate-800 shadow-xs"
-          >
-            <FileSpreadsheet size={13} className="text-emerald-400" />
-            <span>ส่งออกรายการคัดกรอง (CSV)</span>
-          </button>
+          <div className="flex flex-wrap items-center gap-2 self-start sm:self-center">
+            <button
+              onClick={() => exportInspectionLogsToExcel(filteredLogs, extinguishers)}
+              disabled={filteredLogs.length === 0}
+              title="ส่งออกประวัติการตรวจเช็คเป็นไฟล์ Excel (.xlsx)"
+              className="py-1.5 px-3 bg-emerald-950/80 hover:bg-emerald-900 border border-emerald-800/80 text-emerald-300 disabled:opacity-40 text-xs font-bold rounded-lg transition-colors flex items-center gap-1.5 cursor-pointer shadow-xs"
+            >
+              <FileSpreadsheet size={13} className="text-emerald-400" />
+              <span>ส่งออก Excel</span>
+            </button>
+
+            <button
+              onClick={() => exportInspectionLogsToPDF(filteredLogs, extinguishers)}
+              disabled={filteredLogs.length === 0}
+              title="ส่งออกประวัติการตรวจเช็คเป็นไฟล์ PDF (.pdf)"
+              className="py-1.5 px-3 bg-rose-950/80 hover:bg-rose-900 border border-rose-800/80 text-rose-300 disabled:opacity-40 text-xs font-bold rounded-lg transition-colors flex items-center gap-1.5 cursor-pointer shadow-xs"
+            >
+              <FileText size={13} className="text-rose-400" />
+              <span>ส่งออก PDF</span>
+            </button>
+          </div>
         </div>
 
         {/* Filter controls */}
@@ -231,7 +246,7 @@ export default function AllInspectionLogs({ logs, extinguishers }: AllInspection
                       </span>
                       <span className="flex items-center gap-1 text-slate-300">
                         <User size={13} className="text-slate-500" />
-                        ผู้ตรวจ: {log.inspectorName}
+                        ผู้ตรวจ: {cleanInspectorName(log.inspectorName)}
                       </span>
                       <span className="flex items-center gap-1 text-slate-450 font-mono">
                         <Calendar size={13} className="text-slate-500" />
@@ -268,76 +283,229 @@ export default function AllInspectionLogs({ logs, extinguishers }: AllInspection
                           <span>รายการเช็คลิสต์ด้านวิศวกรรมความปลอดภัย (Safety Checklist Items)</span>
                         </h4>
                         
-                        <div className="grid grid-cols-2 md:grid-cols-4 gap-2.5">
-                          {/* 1. Pressure Gauge */}
-                          <div className="p-3 bg-slate-900 rounded-xl border border-slate-850 flex flex-col justify-between shadow-sm">
-                            <span className="text-[10px] text-slate-500 font-bold">1. เกจวัดแรงดัน</span>
-                            <span className={`text-xs font-extrabold mt-1.5 ${
-                              log.checklist?.pressure === 'ปกติ' ? 'text-emerald-400' : 'text-rose-400'
-                            }`}>
-                              {log.checklist?.pressure || 'ปกติ'}
-                            </span>
-                          </div>
+                        <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-2.5">
+                          {(() => {
+                            const ext = extinguishers.find(e => e.id === log.feId);
+                            const category = ext?.assetType || ext?.category || (
+                              ext?.type?.includes('ไฟฉุกเฉิน') || log.feId.startsWith('EM-') || log.feId.startsWith('EL-') ? 'ไฟฉุกเฉิน' :
+                              ext?.type?.includes('ทางหนีไฟ') || ext?.type?.includes('Exit') || log.feId.startsWith('EX-') || log.feId.startsWith('EXIT-') || log.feId.startsWith('ES-') ? 'ป้ายบอกทางหนีไฟ' :
+                              ext?.type?.includes('แจ้งเหตุ') || log.feId.startsWith('FCP-') || log.feId.startsWith('FA-') ? 'ตู้แจ้งเหตุเพลิงไหม้' :
+                              ext?.type?.includes('ตู้ดับเพลิง') || log.feId.startsWith('FHC-') ? 'ตู้ดับเพลิง' : 
+                              ext?.type?.includes('ประตู') || log.feId.startsWith('FD-') ? 'ประตูกันไฟ' : 
+                              'ถังดับเพลิง'
+                            );
+                            
+                            if (category === 'ไฟฉุกเฉิน') {
+                              return (
+                                <>
+                                  <div className="p-3 bg-slate-900 rounded-xl border border-slate-850 flex flex-col justify-between shadow-sm">
+                                    <span className="text-[10px] text-slate-500 font-bold">1. สภาพหลอดไฟ/การติดสว่าง</span>
+                                    <span className={`text-xs font-extrabold mt-1.5 ${ (log.checklist?.emergencyLightStatus || log.checklist?.generalStatus || 'ปกติ') === 'ปกติ' ? 'text-emerald-400' : 'text-rose-400' }`}>
+                                      {log.checklist?.emergencyLightStatus || log.checklist?.generalStatus || 'ปกติ'}
+                                    </span>
+                                  </div>
+                                  <div className="p-3 bg-slate-900 rounded-xl border border-slate-850 flex flex-col justify-between shadow-sm">
+                                    <span className="text-[10px] text-slate-500 font-bold">2. การเข้าถึง/ตำแหน่งติดตั้ง</span>
+                                    <span className={`text-xs font-extrabold mt-1.5 ${ (log.checklist?.accessibility || 'ปกติ') === 'ปกติ' ? 'text-emerald-400' : 'text-rose-400' }`}>
+                                      {log.checklist?.accessibility || 'ปกติ'}
+                                    </span>
+                                  </div>
+                                </>
+                              );
+                            }
 
-                          {/* 2. Safety Pin */}
-                          <div className="p-3 bg-slate-900 rounded-xl border border-slate-850 flex flex-col justify-between shadow-sm">
-                            <span className="text-[10px] text-slate-500 font-bold">2. สลักนิรภัย/ซีล</span>
-                            <span className={`text-xs font-extrabold mt-1.5 ${
-                              log.checklist?.safetyPin === 'ปกติ' ? 'text-emerald-400' : 'text-rose-400'
-                            }`}>
-                              {log.checklist?.safetyPin || 'ปกติ'}
-                            </span>
-                          </div>
+                            if (category === 'ป้ายบอกทางหนีไฟ') {
+                              return (
+                                <>
+                                  <div className="p-3 bg-slate-900 rounded-xl border border-slate-850 flex flex-col justify-between shadow-sm">
+                                    <span className="text-[10px] text-slate-500 font-bold">1. สภาพป้ายไฟ/ความสว่าง</span>
+                                    <span className={`text-xs font-extrabold mt-1.5 ${ (log.checklist?.exitSignStatus || log.checklist?.generalStatus || 'ปกติ') === 'ปกติ' ? 'text-emerald-400' : 'text-rose-400' }`}>
+                                      {log.checklist?.exitSignStatus || log.checklist?.generalStatus || 'ปกติ'}
+                                    </span>
+                                  </div>
+                                  <div className="p-3 bg-slate-900 rounded-xl border border-slate-850 flex flex-col justify-between shadow-sm">
+                                    <span className="text-[10px] text-slate-500 font-bold">2. ความชัดเจน/การมองเห็น</span>
+                                    <span className={`text-xs font-extrabold mt-1.5 ${ (log.checklist?.accessibility || 'ปกติ') === 'ปกติ' ? 'text-emerald-400' : 'text-rose-400' }`}>
+                                      {log.checklist?.accessibility || 'ปกติ'}
+                                    </span>
+                                  </div>
+                                </>
+                              );
+                            }
 
-                          {/* 3. Hose & Nozzle */}
-                          <div className="p-3 bg-slate-900 rounded-xl border border-slate-850 flex flex-col justify-between shadow-sm">
-                            <span className="text-[10px] text-slate-500 font-bold">3. สายฉีดและหัวฉีด</span>
-                            <span className={`text-xs font-extrabold mt-1.5 ${
-                              log.checklist?.hoseNozzle === 'ปกติ' ? 'text-emerald-400' : 'text-rose-400'
-                            }`}>
-                              {log.checklist?.hoseNozzle || 'ปกติ'}
-                            </span>
-                          </div>
+                            if (category === 'ตู้แจ้งเหตุเพลิงไหม้') {
+                              return (
+                                <>
+                                  <div className="p-3 bg-slate-900 rounded-xl border border-slate-850 flex flex-col justify-between shadow-sm">
+                                    <span className="text-[10px] text-slate-500 font-bold">1. ไฟแสดงสถานะหน้าตู้</span>
+                                    <span className={`text-xs font-extrabold mt-1.5 ${ (log.checklist?.fcpStatusLed || 'ปกติ') === 'ปกติ' ? 'text-emerald-400' : 'text-rose-400' }`}>
+                                      {log.checklist?.fcpStatusLed || 'ปกติ'}
+                                    </span>
+                                  </div>
+                                  <div className="p-3 bg-slate-900 rounded-xl border border-slate-850 flex flex-col justify-between shadow-sm">
+                                    <span className="text-[10px] text-slate-500 font-bold">2. ทดสอบสัญญาณไฟหน้าตู้</span>
+                                    <span className={`text-xs font-extrabold mt-1.5 ${ (log.checklist?.fcpLampTest || 'ปกติ') === 'ปกติ' ? 'text-emerald-400' : 'text-rose-400' }`}>
+                                      {log.checklist?.fcpLampTest || 'ปกติ'}
+                                    </span>
+                                  </div>
+                                  <div className="p-3 bg-slate-900 rounded-xl border border-slate-850 flex flex-col justify-between shadow-sm">
+                                    <span className="text-[10px] text-slate-500 font-bold">3. สถานะตู้ FCP</span>
+                                    <span className={`text-xs font-extrabold mt-1.5 ${ (log.checklist?.fcpMainStatus || 'ปกติ') === 'ปกติ' ? 'text-emerald-400' : 'text-rose-400' }`}>
+                                      {log.checklist?.fcpMainStatus || 'ปกติ'}
+                                    </span>
+                                  </div>
+                                  <div className="p-3 bg-slate-900 rounded-xl border border-slate-850 flex flex-col justify-between shadow-sm">
+                                    <span className="text-[10px] text-slate-500 font-bold">4. Trouble</span>
+                                    <span className={`text-xs font-extrabold mt-1.5 ${ (log.checklist?.fcpTrouble || 'ไม่มี Trouble') === 'ไม่มี Trouble' ? 'text-emerald-400' : 'text-rose-400' }`}>
+                                      {log.checklist?.fcpTrouble || 'ไม่มี Trouble'}
+                                    </span>
+                                    {log.checklist?.fcpTrouble === 'มี Trouble' && log.checklist?.fcpTroubleZone && (
+                                      <span className="text-[9px] text-slate-400 mt-1">
+                                        โซน: {log.checklist.fcpTroubleZone} {log.checklist.fcpTroubleCause ? `(${log.checklist.fcpTroubleCause})` : ''}
+                                      </span>
+                                    )}
+                                  </div>
+                                  <div className="p-3 bg-slate-900 rounded-xl border border-slate-850 flex flex-col justify-between shadow-sm">
+                                    <span className="text-[10px] text-slate-500 font-bold">5. Disable</span>
+                                    <span className={`text-xs font-extrabold mt-1.5 ${ (log.checklist?.fcpDisable || 'ไม่มี Disable') === 'ไม่มี Disable' ? 'text-emerald-400' : 'text-rose-400' }`}>
+                                      {log.checklist?.fcpDisable || 'ไม่มี Disable'}
+                                    </span>
+                                    {log.checklist?.fcpDisable === 'มี Disable' && log.checklist?.fcpDisableZone && (
+                                      <span className="text-[9px] text-slate-400 mt-1">
+                                        โซน: {log.checklist.fcpDisableZone} {log.checklist.fcpDisableCause ? `(${log.checklist.fcpDisableCause})` : ''}
+                                      </span>
+                                    )}
+                                  </div>
+                                  <div className="p-3 bg-slate-900 rounded-xl border border-slate-850 flex flex-col justify-between shadow-sm">
+                                    <span className="text-[10px] text-slate-500 font-bold">6. พื้นที่หน้าตู้ FCP</span>
+                                    <span className={`text-xs font-extrabold mt-1.5 ${ (log.checklist?.accessibility || 'ปกติ') === 'ปกติ' ? 'text-emerald-400' : 'text-rose-400' }`}>
+                                      {log.checklist?.accessibility || 'ปกติ'}
+                                    </span>
+                                  </div>
+                                </>
+                              );
+                            }
 
-                          {/* 4. Body Condition */}
-                          <div className="p-3 bg-slate-900 rounded-xl border border-slate-850 flex flex-col justify-between shadow-sm">
-                            <span className="text-[10px] text-slate-500 font-bold">4. สภาพตัวถังภายนอก</span>
-                            <span className={`text-xs font-extrabold mt-1.5 ${
-                              log.checklist?.bodyCondition === 'ปกติ' ? 'text-emerald-400' : 'text-rose-400'
-                            }`}>
-                              {log.checklist?.bodyCondition || 'ปกติ'}
-                            </span>
-                          </div>
+                            if (category === 'ตู้ดับเพลิง') {
+                              return (
+                                <>
+                                  <div className="p-3 bg-slate-900 rounded-xl border border-slate-850 flex flex-col justify-between shadow-sm">
+                                    <span className="text-[10px] text-slate-500 font-bold">1. สภาพตู้ดับเพลิง</span>
+                                    <span className={`text-xs font-extrabold mt-1.5 ${ (log.checklist?.cabinetCondition || log.checklist?.cabinetGlass || 'ปกติ') === 'ปกติ' ? 'text-emerald-400' : 'text-rose-400' }`}>
+                                      {log.checklist?.cabinetCondition || log.checklist?.cabinetGlass || 'ปกติ'}
+                                    </span>
+                                  </div>
+                                  <div className="p-3 bg-slate-900 rounded-xl border border-slate-850 flex flex-col justify-between shadow-sm">
+                                    <span className="text-[10px] text-slate-500 font-bold">2. วาวล์เปิดปิดน้ำ</span>
+                                    <span className={`text-xs font-extrabold mt-1.5 ${ (log.checklist?.valveStatus || 'ปกติ') === 'ปกติ' ? 'text-emerald-400' : 'text-rose-400' }`}>
+                                      {log.checklist?.valveStatus || 'ปกติ'}
+                                    </span>
+                                  </div>
+                                  <div className="p-3 bg-slate-900 rounded-xl border border-slate-850 flex flex-col justify-between shadow-sm">
+                                    <span className="text-[10px] text-slate-500 font-bold">3. สายฉีดน้ำดับเพลิง</span>
+                                    <span className={`text-xs font-extrabold mt-1.5 ${ (log.checklist?.hoseCondition || 'ปกติ') === 'ปกติ' ? 'text-emerald-400' : 'text-rose-400' }`}>
+                                      {log.checklist?.hoseCondition || 'ปกติ'}
+                                    </span>
+                                  </div>
+                                  <div className="p-3 bg-slate-900 rounded-xl border border-slate-850 flex flex-col justify-between shadow-sm">
+                                    <span className="text-[10px] text-slate-500 font-bold">4. อุปกรณ์ภายในตู้</span>
+                                    <span className={`text-xs font-extrabold mt-1.5 ${ (log.checklist?.cabinetEquipment || 'ครบ') === 'ครบ' ? 'text-emerald-400' : 'text-rose-400' }`}>
+                                      {log.checklist?.cabinetEquipment || 'ครบ'}
+                                    </span>
+                                  </div>
+                                </>
+                              );
+                            }
 
-                          {/* 5. Instruction Label */}
-                          <div className="p-3 bg-slate-900 rounded-xl border border-slate-850 flex flex-col justify-between shadow-sm">
-                            <span className="text-[10px] text-slate-500 font-bold">5. ป้ายแนะนำวิธีใช้งาน</span>
-                            <span className={`text-xs font-extrabold mt-1.5 ${
-                              log.checklist?.instructionLabel === 'ปกติ' ? 'text-emerald-400' : 'text-rose-400'
-                            }`}>
-                              {log.checklist?.instructionLabel || 'ปกติ'}
-                            </span>
-                          </div>
+                            if (category === 'ประตูกันไฟ') {
+                              return (
+                                <>
+                                  <div className="p-3 bg-slate-900 rounded-xl border border-slate-850 flex flex-col justify-between shadow-sm">
+                                    <span className="text-[10px] text-slate-500 font-bold">1. สภาพประตู</span>
+                                    <span className={`text-xs font-extrabold mt-1.5 ${ (log.checklist?.doorCondition || log.checklist?.doorCloser || 'ปกติ') === 'ปกติ' ? 'text-emerald-400' : 'text-rose-400' }`}>
+                                      {log.checklist?.doorCondition || log.checklist?.doorCloser || 'ปกติ'}
+                                    </span>
+                                  </div>
+                                  <div className="p-3 bg-slate-900 rounded-xl border border-slate-850 flex flex-col justify-between shadow-sm">
+                                    <span className="text-[10px] text-slate-500 font-bold">2. สวิต์ปุ่มกด-แม่เหล็ก</span>
+                                    <span className={`text-xs font-extrabold mt-1.5 ${ (log.checklist?.magnetSwitch || log.checklist?.panicBar || 'ปกติ') === 'ปกติ' ? 'text-emerald-400' : 'text-rose-400' }`}>
+                                      {log.checklist?.magnetSwitch || log.checklist?.panicBar || 'ปกติ'}
+                                    </span>
+                                  </div>
+                                  <div className="p-3 bg-slate-900 rounded-xl border border-slate-850 flex flex-col justify-between shadow-sm">
+                                    <span className="text-[10px] text-slate-500 font-bold">3. ประตูปิดภายใน 15 วินาที</span>
+                                    <span className={`text-xs font-extrabold mt-1.5 ${ (log.checklist?.autoCloseSpeed || log.checklist?.fireGasket || 'ปกติ') === 'ปกติ' ? 'text-emerald-400' : 'text-rose-400' }`}>
+                                      {log.checklist?.autoCloseSpeed || log.checklist?.fireGasket || 'ปกติ'}
+                                    </span>
+                                  </div>
+                                </>
+                              );
+                            }
 
-                          {/* 6. Accessibility */}
-                          <div className="p-3 bg-slate-900 rounded-xl border border-slate-850 flex flex-col justify-between shadow-sm">
-                            <span className="text-[10px] text-slate-500 font-bold">6. การเข้าถึงได้ง่าย</span>
-                            <span className={`text-xs font-extrabold mt-1.5 ${
-                              log.checklist?.accessibility === 'ปกติ' ? 'text-emerald-400' : 'text-rose-400'
-                            }`}>
-                              {log.checklist?.accessibility || 'ปกติ'}
-                            </span>
-                          </div>
+                            return (
+                              <>
+                                {/* 1. Pressure Gauge */}
+                                <div className="p-3 bg-slate-900 rounded-xl border border-slate-850 flex flex-col justify-between shadow-sm">
+                                  <span className="text-[10px] text-slate-500 font-bold">1. เกจวัดแรงดัน</span>
+                                  <span className={`text-xs font-extrabold mt-1.5 ${
+                                    log.checklist?.pressure === 'ปกติ' ? 'text-emerald-400' : 'text-rose-400'
+                                  }`}>
+                                    {log.checklist?.pressure || 'ปกติ'}
+                                  </span>
+                                </div>
 
-                          {/* 7. Weight Status */}
-                          <div className="p-3 bg-slate-900 rounded-xl border border-slate-850 flex flex-col justify-between shadow-sm">
-                            <span className="text-[10px] text-slate-500 font-bold">7. น้ำหนักก๊าซ/เคมี</span>
-                            <span className={`text-xs font-extrabold mt-1.5 ${
-                              log.checklist?.weightStatus === 'ปกติ' ? 'text-emerald-400' : 'text-rose-400'
-                            }`}>
-                              {log.checklist?.weightStatus || 'ปกติ'}
-                            </span>
-                          </div>
+                                {/* 2. Safety Pin */}
+                                <div className="p-3 bg-slate-900 rounded-xl border border-slate-850 flex flex-col justify-between shadow-sm">
+                                  <span className="text-[10px] text-slate-500 font-bold">2. สลักนิรภัย/ซีล</span>
+                                  <span className={`text-xs font-extrabold mt-1.5 ${
+                                    log.checklist?.safetyPin === 'ปกติ' ? 'text-emerald-400' : 'text-rose-400'
+                                  }`}>
+                                    {log.checklist?.safetyPin || 'ปกติ'}
+                                  </span>
+                                </div>
+
+                                {/* 3. Hose & Nozzle */}
+                                <div className="p-3 bg-slate-900 rounded-xl border border-slate-850 flex flex-col justify-between shadow-sm">
+                                  <span className="text-[10px] text-slate-500 font-bold">3. สายฉีดและหัวฉีด</span>
+                                  <span className={`text-xs font-extrabold mt-1.5 ${
+                                    log.checklist?.hoseNozzle === 'ปกติ' ? 'text-emerald-400' : 'text-rose-400'
+                                  }`}>
+                                    {log.checklist?.hoseNozzle || 'ปกติ'}
+                                  </span>
+                                </div>
+
+                                {/* 4. Body Condition */}
+                                <div className="p-3 bg-slate-900 rounded-xl border border-slate-850 flex flex-col justify-between shadow-sm">
+                                  <span className="text-[10px] text-slate-500 font-bold">4. สภาพตัวถังภายนอก</span>
+                                  <span className={`text-xs font-extrabold mt-1.5 ${
+                                    log.checklist?.bodyCondition === 'ปกติ' ? 'text-emerald-400' : 'text-rose-400'
+                                  }`}>
+                                    {log.checklist?.bodyCondition || 'ปกติ'}
+                                  </span>
+                                </div>
+
+                                {/* 5. Instruction Label */}
+                                <div className="p-3 bg-slate-900 rounded-xl border border-slate-850 flex flex-col justify-between shadow-sm">
+                                  <span className="text-[10px] text-slate-500 font-bold">5. ป้ายแนะนำวิธีใช้งาน</span>
+                                  <span className={`text-xs font-extrabold mt-1.5 ${
+                                    log.checklist?.instructionLabel === 'ปกติ' ? 'text-emerald-400' : 'text-rose-400'
+                                  }`}>
+                                    {log.checklist?.instructionLabel || 'ปกติ'}
+                                  </span>
+                                </div>
+
+                                {/* 6. Accessibility */}
+                                <div className="p-3 bg-slate-900 rounded-xl border border-slate-850 flex flex-col justify-between shadow-sm">
+                                  <span className="text-[10px] text-slate-500 font-bold">6. การเข้าถึงได้ง่าย</span>
+                                  <span className={`text-xs font-extrabold mt-1.5 ${
+                                    log.checklist?.accessibility === 'ปกติ' ? 'text-emerald-400' : 'text-rose-400'
+                                  }`}>
+                                    {log.checklist?.accessibility || 'ปกติ'}
+                                  </span>
+                                </div>
+                              </>
+                            );
+                          })()}
                         </div>
                       </div>
 

@@ -17,14 +17,18 @@ import {
   EyeOff, 
   User, 
   Briefcase, 
-  Shield 
+  Shield,
+  Sun,
+  Moon
 } from 'lucide-react';
+import { useTheme } from '../lib/ThemeContext';
 
 interface AuthScreenProps {
   onSuccess?: () => void;
 }
 
 export default function AuthScreen({ onSuccess }: AuthScreenProps) {
+  const { theme, toggleTheme } = useTheme();
   const [isSignUp, setIsSignUp] = useState(false);
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
@@ -37,7 +41,95 @@ export default function AuthScreen({ onSuccess }: AuthScreenProps) {
   // Sign up details
   const [fullName, setFullName] = useState('');
   const [department, setDepartment] = useState('');
-  const [role] = useState('Inspector'); // Always default to Inspector for self-registration
+  const [role, setRole] = useState<'Admin' | 'Inspector'>('Inspector');
+
+  // Pre-configured Test Users list (2 Admin + 2 Inspector)
+  const testAccounts = [
+    {
+      role: 'Admin' as const,
+      email: 'admin1@overbrook.com',
+      password: 'password123',
+      fullName: 'ธนวัฒน์ อินตายวง (Admin 1)',
+      department: 'แผนกช่างเทคนิคควบคุมระบบ',
+      badgeColor: 'bg-red-500/20 text-red-400 border-red-500/40',
+      description: 'สิทธิ์เต็ม: จัดการถังดับเพลิง เพิ่ม/แก้ไข/ลบ ออกรายงาน และจัดการระบบ'
+    },
+    {
+      role: 'Admin' as const,
+      email: 'admin2@overbrook.com',
+      password: 'password123',
+      fullName: 'วิศรุต อุปถัมภ์ (Admin 2)',
+      department: 'ฝ่ายบริหารความปลอดภัยอาคาร',
+      badgeColor: 'bg-red-500/20 text-red-400 border-red-500/40',
+      description: 'สิทธิ์เต็ม: ดูแลระบบภาพรวม ตรวจสอบสถิติ และออกรายงาน PDF'
+    },
+    {
+      role: 'Inspector' as const,
+      email: 'inspector1@overbrook.com',
+      password: 'password123',
+      fullName: 'สมชาย รักความปลอดภัย (Inspector 1)',
+      department: 'แผนกป้องกันและบรรเทาสาธารณภัย',
+      badgeColor: 'bg-sky-500/20 text-sky-400 border-sky-500/40',
+      description: 'สิทธิ์ผู้ตรวจ: สแกน QR Code ตรวจสภาพถัง และบันทึกผลการตรวจเช็ค'
+    },
+    {
+      role: 'Inspector' as const,
+      email: 'inspector2@overbrook.com',
+      password: 'password123',
+      fullName: 'สมหญิง ตรวจเช็คดี (Inspector 2)',
+      department: 'แผนกอาคารและสถานที่',
+      badgeColor: 'bg-sky-500/20 text-sky-400 border-sky-500/40',
+      description: 'สิทธิ์ผู้ตรวจ: สแกน QR Code ตรวจสภาพถัง และบันทึกผลการตรวจเช็ค'
+    }
+  ];
+
+  // Helper for 1-click Quick Test Login
+  const handleQuickLogin = async (acc: typeof testAccounts[0]) => {
+    setLoading(true);
+    setError(null);
+    try {
+      let userCredential;
+      try {
+        // Try to sign in first
+        userCredential = await signInWithEmailAndPassword(auth, acc.email, acc.password);
+      } catch (signInErr: any) {
+        // If account doesn't exist yet, auto-create it in Firebase Auth
+        if (
+          signInErr.code === 'auth/user-not-found' ||
+          signInErr.code === 'auth/invalid-credential' ||
+          signInErr.code === 'auth/wrong-password'
+        ) {
+          try {
+            userCredential = await createUserWithEmailAndPassword(auth, acc.email, acc.password);
+          } catch (createErr: any) {
+            if (createErr.code === 'auth/email-already-in-use') {
+              // Try signing in with default password if created previously
+              userCredential = await signInWithEmailAndPassword(auth, acc.email, acc.password);
+            } else {
+              throw createErr;
+            }
+          }
+        } else {
+          throw signInErr;
+        }
+      }
+
+      if (userCredential) {
+        // Ensure user profile in Firestore has exact test role, name, and department
+        await saveUserProfile(userCredential.user.uid, acc.email, {
+          fullName: acc.fullName,
+          department: acc.department,
+          role: acc.role
+        });
+        onSuccess?.();
+      }
+    } catch (err: any) {
+      console.error("Quick test login error:", err);
+      setError(`ไม่สามารถเข้าสู่ระบบด้วยบัญชีทดสอบได้: ${err.message}`);
+    } finally {
+      setLoading(false);
+    }
+  };
 
 
 
@@ -113,11 +205,11 @@ export default function AuthScreen({ onSuccess }: AuthScreenProps) {
       if (isSignUp) {
         try {
           const userCredential = await createUserWithEmailAndPassword(auth, email, password);
-          // Save user profile info to users collection in Firestore
+          // Save user profile info to users collection in Firestore (Default role: Inspector)
           await saveUserProfile(userCredential.user.uid, email, {
             fullName,
             department,
-            role
+            role: 'Inspector'
           });
         } catch (signUpErr: any) {
           if (signUpErr.code === 'auth/email-already-in-use') {
@@ -129,7 +221,7 @@ export default function AuthScreen({ onSuccess }: AuthScreenProps) {
               await saveUserProfile(userCredential.user.uid, email, {
                 fullName,
                 department,
-                role
+                role: 'Inspector'
               });
             } catch (signInErr: any) {
               console.log("Signing in with entered password failed. Attempting to sign in with default password 'firesafe123' to link profile...");
@@ -140,7 +232,7 @@ export default function AuthScreen({ onSuccess }: AuthScreenProps) {
                 await saveUserProfile(userCredential.user.uid, email, {
                   fullName,
                   department,
-                  role
+                  role: 'Inspector'
                 });
               } catch (defaultPwdErr: any) {
                 // If both failed, throw a custom error to indicate password mismatch for an existing account
@@ -182,6 +274,28 @@ export default function AuthScreen({ onSuccess }: AuthScreenProps) {
   return (
     <div className="min-h-screen bg-slate-950 flex flex-col justify-center py-12 sm:px-6 lg:px-8 relative overflow-hidden font-sans">
       
+      {/* Floating Theme Switcher Button */}
+      <div className="absolute top-4 right-4 z-20">
+        <button
+          type="button"
+          onClick={toggleTheme}
+          className="flex items-center gap-2 px-3 py-2 rounded-xl bg-slate-900/80 hover:bg-slate-800 border border-slate-800 text-slate-300 hover:text-white shadow-lg backdrop-blur-sm transition-all cursor-pointer text-xs font-bold"
+          title={theme === 'dark' ? 'เปลี่ยนเป็นโหมดสว่าง (Light Mode)' : 'เปลี่ยนเป็นโหมดมืด (Dark Mode)'}
+        >
+          {theme === 'dark' ? (
+            <>
+              <Sun size={16} className="text-amber-400" />
+              <span>โหมดสว่าง</span>
+            </>
+          ) : (
+            <>
+              <Moon size={16} className="text-indigo-400" />
+              <span>โหมดมืด</span>
+            </>
+          )}
+        </button>
+      </div>
+
       {/* Decorative abstract background lines */}
       <div className="absolute inset-0 bg-[radial-gradient(circle_at_top_right,_var(--tw-gradient-stops))] from-red-950/20 via-slate-950 to-slate-950 pointer-events-none"></div>
       <div className="absolute top-1/4 left-1/2 -translate-x-1/2 -translate-y-1/2 w-[500px] h-[500px] bg-red-600/5 rounded-full blur-[120px] pointer-events-none"></div>
@@ -193,14 +307,14 @@ export default function AuthScreen({ onSuccess }: AuthScreenProps) {
           </div>
         </div>
         <h2 className="mt-6 text-center text-3xl font-extrabold text-white tracking-tight">
-          FIRE SAFE
+          Safety Management System
         </h2>
         <p className="mt-2 text-center text-xs text-slate-400 font-semibold tracking-wider uppercase">
-          ระบบจัดการและตรวจสอบถังดับเพลิงอัจฉริยะ
+          ระบบบริหารจัดการและตรวจสอบอุปกรณ์ความปลอดภัย
         </p>
       </div>
 
-      <div className="mt-8 sm:mx-auto sm:w-full sm:max-w-md relative z-10 px-4">
+      <div className="mt-8 sm:mx-auto sm:w-full sm:max-w-2xl relative z-10 px-4">
         <div className="bg-slate-900 border border-slate-800 py-8 px-6 shadow-2xl rounded-2xl sm:px-10">
           
           {/* Sign In / Sign Up tab selector */}
@@ -274,9 +388,14 @@ export default function AuthScreen({ onSuccess }: AuthScreenProps) {
                   </div>
                 </div>
 
-                <div className="p-3 bg-slate-950/40 border border-slate-800/80 rounded-xl text-slate-400 text-[11px] flex items-center gap-2">
-                  <Shield size={14} className="text-red-500 shrink-0" />
-                  <span>ระดับสิทธิ์เริ่มต้นสำหรับผู้ใช้งานลงทะเบียนใหม่: <strong className="text-white">Inspector (ผู้ตรวจสอบ)</strong></span>
+                <div className="p-3.5 bg-slate-950/80 border border-sky-900/40 rounded-xl text-slate-300 text-[11px] flex items-start gap-2.5 shadow-inner">
+                  <Shield size={16} className="text-sky-400 shrink-0 mt-0.5" />
+                  <div>
+                    <p className="font-bold text-sky-300">สิทธิ์การใช้งานเริ่มต้น: Inspector (ผู้ตรวจสอบ)</p>
+                    <p className="text-slate-400 text-[10px] leading-relaxed mt-0.5">
+                      ผู้ลงทะเบียนใหม่ทุกคนจะได้รับสิทธิ์ <strong className="text-sky-300">Inspector</strong> สำหรับสแกน QR Code และบันทึกผลการตรวจเช็คถังดับเพลิง หากต้องการสิทธิ์ Admin (ผู้ดูแลระบบ) สามารถแจ้งให้ผู้ดูแลระบบเดิมปรับเปลี่ยนสิทธิ์ให้ท่านได้ในระบบ
+                    </p>
+                  </div>
                 </div>
               </motion.div>
             )}
@@ -426,6 +545,59 @@ export default function AuthScreen({ onSuccess }: AuthScreenProps) {
               <span>{loading ? 'กำลังดำเนินการ...' : isSignUp ? 'บันทึกข้อมูลและสมัครสมาชิก' : 'เข้าสู่ระบบความปลอดภัย'}</span>
             </button>
           </form>
+
+          {/* Quick Demo Test Accounts Section */}
+          <div className="mt-8 pt-6 border-t border-slate-800 space-y-4">
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <div className="flex items-center gap-2">
+                <Shield className="text-red-500 shrink-0" size={18} />
+                <h3 className="text-xs sm:text-sm font-extrabold text-white">บัญชีผู้ใช้สำหรับทดสอบระบบ (2 ระดับ • 4 Users)</h3>
+              </div>
+              <span className="text-[10px] font-bold bg-red-950/80 text-red-300 border border-red-800/80 px-2.5 py-1 rounded-full">
+                คลิกเพื่อเข้าสู่ระบบทันที
+              </span>
+            </div>
+            <p className="text-xs text-slate-400">
+              ท่านสามารถคลิกปุ่ม <strong className="text-slate-200">"เข้าสู่ระบบด่วน"</strong> บนการ์ดด้านล่าง เพื่อทดสอบใช้งานระบบในแต่ละสิทธิ์ได้โดยไม่ต้องกรอกรหัสผ่าน:
+            </p>
+
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 pt-1">
+              {testAccounts.map((acc, idx) => (
+                <div
+                  key={acc.email}
+                  className="bg-slate-950/90 border border-slate-800 rounded-xl p-3.5 flex flex-col justify-between space-y-2.5 hover:border-slate-700 transition-all shadow-sm"
+                >
+                  <div className="space-y-1">
+                    <div className="flex items-center justify-between gap-2">
+                      <span className={`text-[10px] font-extrabold px-2 py-0.5 rounded-md border ${acc.badgeColor}`}>
+                        {acc.role === 'Admin' ? '🛡️ Admin (ผู้ดูแลระบบ)' : '🔍 Inspector (ผู้ตรวจสอบ)'} #{idx % 2 + 1}
+                      </span>
+                      <span className="text-[10px] font-mono text-slate-500">รหัสผ่าน: {acc.password}</span>
+                    </div>
+
+                    <p className="text-xs font-extrabold text-white truncate pt-1">{acc.fullName}</p>
+                    <p className="text-[11px] text-slate-400 truncate">{acc.department}</p>
+                    <p className="text-[11px] font-mono text-amber-400/90 truncate">{acc.email}</p>
+                    <p className="text-[10px] text-slate-500 leading-tight pt-1">{acc.description}</p>
+                  </div>
+
+                  <button
+                    type="button"
+                    disabled={loading}
+                    onClick={() => handleQuickLogin(acc)}
+                    className={`w-full py-2 px-3 rounded-lg text-xs font-bold transition-all flex items-center justify-center gap-1.5 cursor-pointer shadow-sm ${
+                      acc.role === 'Admin'
+                        ? 'bg-red-600/90 hover:bg-red-500 text-white shadow-red-950/50'
+                        : 'bg-sky-600/90 hover:bg-sky-500 text-white shadow-sky-950/50'
+                    }`}
+                  >
+                    <LogIn size={13} />
+                    <span>เข้าสู่ระบบด่วน ({acc.role})</span>
+                  </button>
+                </div>
+              ))}
+            </div>
+          </div>
 
 
 
