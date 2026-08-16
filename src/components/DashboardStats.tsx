@@ -22,7 +22,7 @@ interface DashboardStatsProps {
   selectedCategory: string; // 'All' | AssetType
   onSelectCategory: (category: string) => void;
   selectedStatus: string | null;
-  onSelectStatus: (status: string | null) => void;
+  onSelectStatus: (status: string | null, category?: string) => void;
   onNavigateToInventory?: (category: string, status?: string | null) => void;
 }
 
@@ -317,23 +317,40 @@ export default function DashboardStats({
               initial={{ opacity: 0, y: 12 }}
               animate={{ opacity: 1, y: 0 }}
               transition={{ duration: 0.25, delay: idx * 0.04 }}
-              whileHover={{ y: -2 }}
-              onClick={() => onSelectStatus(isActive ? null : stat.statusValue)}
-              className={`cursor-pointer p-3.5 rounded-2xl border flex flex-col justify-between transition-all duration-200 select-none ${
-                isActive ? stat.activeColor : 'bg-slate-900 border-slate-800 hover:border-slate-700 hover:shadow-md'
+              whileHover={{ y: -3, scale: 1.01 }}
+              whileTap={{ scale: 0.98 }}
+              onClick={() => onSelectStatus(isActive ? null : stat.statusValue, selectedCategory === 'All' ? undefined : selectedCategory)}
+              className={`group cursor-pointer p-4 rounded-2xl border flex flex-col justify-between transition-all duration-200 select-none relative overflow-hidden shadow-sm ${
+                isActive ? stat.activeColor : 'bg-slate-900 border-slate-800 hover:border-red-500/60 hover:shadow-lg hover:bg-slate-900/95'
               }`}
             >
-              <div className="flex items-center justify-between">
-                <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider line-clamp-1">{stat.label}</span>
-                <div className={`p-1.5 rounded-lg ${stat.color.split(' ')[0]} ${stat.color.split(' ')[1]}`}>
+              {/* Subtle top indicator on hover/active */}
+              <div className={`absolute top-0 left-0 right-0 h-1 transition-all ${
+                isActive ? 'bg-red-500' : 'bg-transparent group-hover:bg-red-500/50'
+              }`} />
+
+              <div className="flex items-center justify-between gap-1">
+                <span className="text-[11px] font-bold text-slate-300 uppercase tracking-wider line-clamp-1 group-hover:text-white transition-colors">
+                  {stat.label}
+                </span>
+                <div className={`p-1.5 rounded-xl transition-transform group-hover:scale-110 ${stat.color.split(' ')[0]} ${stat.color.split(' ')[1]}`}>
                   <Icon size={14} />
                 </div>
               </div>
+
               <div className="mt-3">
-                <span className="text-2xl font-extrabold text-white tracking-tight font-sans">
-                  {stat.value}
-                </span>
-                <p className="text-[9px] text-slate-400 mt-0.5 font-semibold tracking-wide line-clamp-1">{stat.desc}</p>
+                <div className="flex items-baseline justify-between">
+                  <span className="text-3xl font-black text-white tracking-tight font-sans">
+                    {stat.value}
+                  </span>
+                  <span className="text-[10px] font-bold text-slate-400 group-hover:text-red-400 flex items-center gap-0.5 transition-colors">
+                    <span>คลิกดูรายการ</span>
+                    <ChevronRight size={12} className="transition-transform group-hover:translate-x-0.5" />
+                  </span>
+                </div>
+                <p className="text-[10px] text-slate-400 mt-1 font-semibold tracking-wide line-clamp-1 group-hover:text-slate-300 transition-colors">
+                  {stat.desc}
+                </p>
               </div>
             </motion.div>
           );

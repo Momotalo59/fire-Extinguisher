@@ -26,51 +26,66 @@ import {
   ChevronDown,
   ChevronUp
 } from 'lucide-react';
-import { FireExtinguisher, ExtinguisherType, ExtinguisherStatus, AssetType } from '../types';
+import { FireExtinguisher, ExtinguisherType, ExtinguisherStatus, AssetType, InspectionLog } from '../types';
 import PhotoUploader from './PhotoUploader';
 import { exportExtinguishersToExcel, exportExtinguishersToPDF } from '../lib/exportUtils';
 import { isInspectedInCurrentMonth } from '../lib/dbHelpers';
 import { HOSPITAL_BUILDINGS, buildingSupportsFireDoor, getBuildingEquipmentStats } from '../lib/assetHelpers';
 import QRCodeModal from './QRCodeModal';
+import MonthlyReportModal from './MonthlyReportModal';
 
 interface ExtinguisherListProps {
   extinguishers: FireExtinguisher[];
+  logs?: InspectionLog[];
   selectedId: string | null;
   selectedStatusFilter: string | null;
   selectedAssetCategory?: string;
   selectedBuilding?: string;
+  selectedFloor?: string;
   onSelectAssetCategory?: (category: string) => void;
   onSelectBuilding?: (building: string) => void;
+  onSelectFloor?: (floor: string) => void;
+  onSelectStatusFilter?: (status: string | null) => void;
   onSelectExtinguisher: (id: string) => void;
   onInspect: (extinguisher: FireExtinguisher) => void;
   onAddExtinguisher: (extinguisher: Omit<FireExtinguisher, 'createdAt'>) => Promise<void>;
   onEditExtinguisher: (extinguisher: FireExtinguisher) => Promise<void>;
   onDeleteExtinguisher: (id: string) => Promise<void>;
+  onOpenFloorPlan?: () => void;
   isAdmin?: boolean;
+  userDisplayName?: string;
 }
 
 export default function ExtinguisherList({
   extinguishers,
+  logs = [],
   selectedId,
   selectedStatusFilter,
   selectedAssetCategory: selectedAssetCategoryProp,
   selectedBuilding: selectedBuildingProp,
+  selectedFloor: selectedFloorProp,
   onSelectAssetCategory,
   onSelectBuilding,
+  onSelectFloor,
+  onSelectStatusFilter,
   onSelectExtinguisher,
   onInspect,
   onAddExtinguisher,
   onEditExtinguisher,
   onDeleteExtinguisher,
-  isAdmin = false
+  onOpenFloorPlan,
+  isAdmin = false,
+  userDisplayName = 'นายช่างเทคนิคประจำเวร'
 }: ExtinguisherListProps) {
   const [searchTerm, setSearchTerm] = useState('');
   const [selectedType, setSelectedType] = useState<string>('All');
   const [internalCategory, setInternalCategory] = useState<string>('All');
   const [internalBuilding, setInternalBuilding] = useState<string>('All');
+  const [internalFloor, setInternalFloor] = useState<string>('All');
   
   const selectedAssetCategory = selectedAssetCategoryProp !== undefined ? selectedAssetCategoryProp : internalCategory;
   const selectedBuilding = selectedBuildingProp !== undefined ? selectedBuildingProp : internalBuilding;
+  const selectedFloor = selectedFloorProp !== undefined ? selectedFloorProp : internalFloor;
 
   const handleSelectAssetCategory = (cat: string) => {
     setInternalCategory(cat);
@@ -86,6 +101,40 @@ export default function ExtinguisherList({
     }
   };
 
+  const handleSelectFloor = (fl: string) => {
+    setInternalFloor(fl);
+    if (onSelectFloor) {
+      onSelectFloor(fl);
+    }
+  };
+
+  // Dynamic available floors for the currently selected building (or all buildings)
+  const availableFloors = React.useMemo(() => {
+    const targetExts = (!selectedBuilding || selectedBuilding === 'All')
+      ? extinguishers
+      : extinguishers.filter(e => (e.building || '').trim() === selectedBuilding.trim());
+
+    const floorSet = new Set<string>();
+    targetExts.forEach(e => {
+      if (e.floor && e.floor.trim()) {
+        floorSet.add(e.floor.trim());
+      }
+    });
+
+    return Array.from(floorSet).sort((a, b) => {
+      const numA = parseInt(a.replace(/\D/g, '')) || 0;
+      const numB = parseInt(b.replace(/\D/g, '')) || 0;
+      return numA - numB;
+    });
+  }, [extinguishers, selectedBuilding]);
+
+  // If active floor filter is not in available floors, reset to All
+  React.useEffect(() => {
+    if (selectedFloor !== 'All' && !availableFloors.includes(selectedFloor)) {
+      handleSelectFloor('All');
+    }
+  }, [availableFloors, selectedFloor]);
+
   const [isBuildingStatsOpen, setIsBuildingStatsOpen] = useState(true);
   const [isAddOpen, setIsAddOpen] = useState(false);
   const [isEditOpen, setIsEditOpen] = useState(false);
@@ -94,6 +143,7 @@ export default function ExtinguisherList({
   const [alreadyInspectedExt, setAlreadyInspectedExt] = useState<FireExtinguisher | null>(null);
   const [qrModalExtId, setQrModalExtId] = useState<string | null>(null);
   const [isBatchQrOpen, setIsBatchQrOpen] = useState(false);
+  const [isMonthlyReportOpen, setIsMonthlyReportOpen] = useState(false);
   
   // Form fields for Add/Edit
   const [formId, setFormId] = useState('');
@@ -342,6 +392,8 @@ export default function ExtinguisherList({
 
     const matchesBuilding = !selectedBuilding || selectedBuilding === 'All' || (ext.building || '').trim() === selectedBuilding.trim();
 
+    const matchesFloor = !selectedFloor || selectedFloor === 'All' || (ext.floor || '').trim() === selectedFloor.trim();
+
     let matchesStatus = true;
     if (selectedStatusFilter) {
       if (selectedStatusFilter === 'ใกล้หมดอายุ') {
@@ -351,7 +403,7 @@ export default function ExtinguisherList({
       }
     }
 
-    return matchesSearch && matchesType && matchesCategory && matchesBuilding && matchesStatus;
+    return matchesSearch && matchesType && matchesCategory && matchesBuilding && matchesFloor && matchesStatus;
   });
 
   const statusColors: Record<ExtinguisherStatus, string> = {
@@ -449,6 +501,24 @@ export default function ExtinguisherList({
               <FileText size={13} className="text-rose-400" />
               <span>ส่งออก PDF</span>
             </button>
+            <button
+              onClick={() => setIsMonthlyReportOpen(true)}
+              title="ออกรายงานสรุปผลการตรวจเช็คประจำเดือนและกำหนดช่วงเวลา (PDF)"
+              className="py-1.5 px-3 bg-red-950 border border-red-800/90 text-red-300 hover:bg-red-900/90 hover:text-white text-xs font-bold rounded-lg transition-all flex items-center gap-1.5 cursor-pointer shadow-xs"
+            >
+              <FileText size={13} className="text-red-400" />
+              <span>รายงานสรุปรายเดือน (PDF)</span>
+            </button>
+            {onOpenFloorPlan && (
+              <button
+                onClick={onOpenFloorPlan}
+                title="ดูตำแหน่งจุดติดตั้งบนแผนผังอาคาร (Floor Plan)"
+                className="py-1.5 px-3 bg-blue-950/80 border border-blue-800/80 text-blue-300 hover:bg-blue-900 text-xs font-bold rounded-lg transition-colors flex items-center gap-1.5 cursor-pointer shadow-xs"
+              >
+                <MapPin size={13} className="text-blue-400" />
+                <span>แผนผังอาคาร</span>
+              </button>
+            )}
             <button
               onClick={() => {
                 setQrModalExtId(null);
@@ -614,7 +684,11 @@ export default function ExtinguisherList({
             <div className="flex items-center gap-1.5 bg-red-950/50 border border-red-900/60 rounded-lg py-1 px-2.5 text-[11px] text-red-300">
               <span>สถานะ: <strong className="text-red-400 font-bold">{selectedStatusFilter}</strong></span>
               <button
-                onClick={() => onSelectExtinguisher('')}
+                onClick={() => {
+                  if (onSelectStatusFilter) {
+                    onSelectStatusFilter(null);
+                  }
+                }}
                 className="ml-1 text-red-400 hover:text-white p-0.5 rounded cursor-pointer"
                 title="ล้างตัวกรองสถานะ"
               >

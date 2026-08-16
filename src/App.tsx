@@ -20,6 +20,7 @@ import {
   Shield,
   Bell,
   Building2,
+  MapPin,
   Sun,
   Moon,
   Menu,
@@ -59,6 +60,7 @@ import AuthScreen from './components/AuthScreen';
 import AllInspectionLogs from './components/AllInspectionLogs';
 import UserManagementModal from './components/UserManagementModal';
 import SafetyGuidelineCard from './components/SafetyGuidelineCard';
+import FloorPlanViewer from './components/FloorPlanViewer';
 import { onAuthStateChanged, signOut, User as FirebaseUser } from 'firebase/auth';
 import { doc, getDoc } from 'firebase/firestore';
 import { auth, db } from './lib/firebase';
@@ -85,7 +87,7 @@ export default function App() {
   const [authLoading, setAuthLoading] = useState(true);
 
   // Selection & UI States
-  const [currentTab, setCurrentTab] = useState<'dashboard' | 'extinguishers' | 'history'>('dashboard');
+  const [currentTab, setCurrentTab] = useState<'dashboard' | 'extinguishers' | 'history' | 'floorplan'>('dashboard');
   const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false);
   const [selectedAssetCategory, setSelectedAssetCategory] = useState<string>('All');
   const [selectedBuilding, setSelectedBuilding] = useState<string>('All');
@@ -296,9 +298,19 @@ export default function App() {
   };
 
   // Trigger from stats card clicking
-  const handleSelectStatusFilter = (status: string | null) => {
+  const handleSelectStatusFilter = (status: string | null, category?: string) => {
+    setActiveInspection(null);
+    setSelectedId(null);
+    if (category) {
+      setSelectedAssetCategory(category);
+    } else if (dashboardCategory !== 'All') {
+      setSelectedAssetCategory(dashboardCategory);
+    }
     setSelectedStatusFilter(status);
     setCurrentTab('extinguishers');
+    if (status) {
+      triggerToast(`กรองรายการอุปกรณ์สถานะ: "${status}" เรียบร้อยแล้ว`);
+    }
   };
 
   // Trigger from QR scanner simulator
@@ -615,14 +627,13 @@ export default function App() {
                   <div className="grid grid-cols-1 sm:grid-cols-2 gap-1.5 pt-1 border-t border-slate-800/60">
                     {HOSPITAL_BUILDINGS.map((bldg) => {
                       const stats = getBuildingEquipmentStats(extinguishers, bldg.name);
-                      const isSelected = currentTab === 'extinguishers' && selectedBuilding === bldg.name;
+                      const isSelected = (currentTab === 'extinguishers' || currentTab === 'floorplan') && selectedBuilding === bldg.name;
 
                       return (
                         <button
                           key={bldg.id}
                           onClick={() => {
                             setActiveInspection(null);
-                            setCurrentTab('extinguishers');
                             setSelectedBuilding(bldg.name);
                             setSelectedAssetCategory('All');
                             setIsMobileMenuOpen(false);
@@ -649,7 +660,29 @@ export default function App() {
                 )}
               </div>
 
-              {/* 4. Inspection History */}
+              {/* 4. Interactive Floor Plan Menu Item */}
+              <button
+                onClick={() => {
+                  setActiveInspection(null);
+                  setCurrentTab('floorplan');
+                  setIsMobileMenuOpen(false);
+                }}
+                className={`w-full flex items-center justify-between p-2.5 rounded-xl text-xs font-bold transition-all cursor-pointer ${
+                  currentTab === 'floorplan'
+                    ? 'bg-red-600 text-white shadow-md'
+                    : 'bg-slate-850 hover:bg-slate-800 text-slate-200 border border-slate-800'
+                }`}
+              >
+                <div className="flex items-center gap-2.5">
+                  <MapPin size={16} className={currentTab === 'floorplan' ? 'text-white' : 'text-emerald-400'} />
+                  <span>แผนผังจุดติดตั้ง (Floor Plan)</span>
+                </div>
+                <span className="text-[10px] bg-emerald-950/60 border border-emerald-900/50 text-emerald-400 font-mono py-0.5 px-2 rounded-full">
+                  LIVE CAD
+                </span>
+              </button>
+
+              {/* 5. Inspection History */}
               <button
                 onClick={() => {
                   setActiveInspection(null);
@@ -1225,6 +1258,7 @@ export default function App() {
                           selectedBuilding={selectedBuilding}
                           onSelectAssetCategory={(cat) => setSelectedAssetCategory(cat)}
                           onSelectBuilding={(bldg) => setSelectedBuilding(bldg)}
+                          onSelectStatusFilter={(status) => setSelectedStatusFilter(status)}
                           onSelectExtinguisher={(id) => {
                             setSelectedId(id || null);
                             // Clear other active forms when changing extinguisher selection
@@ -1239,6 +1273,7 @@ export default function App() {
                           onAddExtinguisher={handleAddExtinguisher}
                           onEditExtinguisher={handleEditExtinguisher}
                           onDeleteExtinguisher={handleDeleteExtinguisher}
+                          onOpenFloorPlan={() => setCurrentTab('floorplan')}
                           isAdmin={userProfile?.role === 'Admin'}
                         />
                       </div>
@@ -1260,6 +1295,34 @@ export default function App() {
                       </div>
 
                     </div>
+                  </motion.div>
+                )}
+
+                {currentTab === 'floorplan' && (
+                  <motion.div
+                    key="floorplan-tab"
+                    initial={{ opacity: 0, y: 10 }}
+                    animate={{ opacity: 1, y: 0 }}
+                    exit={{ opacity: 0, y: -10 }}
+                    transition={{ duration: 0.2 }}
+                    className="space-y-6"
+                  >
+                    <FloorPlanViewer 
+                      extinguishers={extinguishers}
+                      selectedBuilding={selectedBuilding}
+                      selectedAssetCategory={selectedAssetCategory}
+                      selectedId={selectedId}
+                      onSelectExtinguisher={(id) => {
+                        setSelectedId(id || null);
+                      }}
+                      onInspect={(ext) => {
+                        setSelectedId(ext.id);
+                        setIsScannerOpen(false);
+                        setActiveInspection(ext);
+                      }}
+                      onSelectBuilding={(bldg) => setSelectedBuilding(bldg)}
+                      onSelectCategory={(cat) => setSelectedAssetCategory(cat)}
+                    />
                   </motion.div>
                 )}
 
