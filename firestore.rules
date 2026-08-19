@@ -25,5 +25,10 @@ service cloud.firestore {
     match /systemLogs/{logId} {
       allow read, write: if true;
     }
+
+    // Allow public read and write for the hospitalBuildings collection
+    match /hospitalBuildings/{buildingId} {
+      allow read, write: if true;
+    }
   }
 }

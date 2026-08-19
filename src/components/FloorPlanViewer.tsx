@@ -29,11 +29,14 @@ import {
   getAssetCategory, 
   getAssetIcon,
   isAssetInspectedInCurrentCycle,
-  buildingSupportsFireDoor 
+  buildingSupportsFireDoor,
+  isBuildingOnlyFireExtinguisher,
+  type BuildingInfo
 } from '../lib/assetHelpers';
 
 interface FloorPlanViewerProps {
   extinguishers: FireExtinguisher[];
+  buildings?: BuildingInfo[];
   selectedBuilding: string;
   selectedAssetCategory?: string;
   selectedId?: string | null;
@@ -61,6 +64,7 @@ interface FloorLayout {
 
 export default function FloorPlanViewer({
   extinguishers,
+  buildings,
   selectedBuilding: initialBuilding,
   selectedAssetCategory = 'All',
   selectedId,
@@ -69,9 +73,15 @@ export default function FloorPlanViewer({
   onSelectBuilding,
   onSelectCategory
 }: FloorPlanViewerProps) {
+  const buildingList = useMemo(() => {
+    return (buildings && buildings.length > 0) ? buildings : HOSPITAL_BUILDINGS;
+  }, [buildings]);
+
   // Current active building state (default to initial prop or first hospital building)
   const [activeBuilding, setActiveBuilding] = useState<string>(
-    initialBuilding && initialBuilding !== 'All' ? initialBuilding : HOSPITAL_BUILDINGS[0].name
+    initialBuilding && initialBuilding !== 'All' 
+      ? initialBuilding 
+      : (buildingList[0]?.name || HOSPITAL_BUILDINGS[0].name)
   );
 
   // Sync if prop changes to a specific building
@@ -282,7 +292,7 @@ export default function FloorPlanViewer({
               }}
               className="bg-slate-850 hover:bg-slate-800 border border-slate-700 text-slate-200 text-xs font-bold rounded-xl py-2 pl-3 pr-8 focus:outline-none focus:ring-2 focus:ring-red-500 cursor-pointer shadow-xs"
             >
-              {HOSPITAL_BUILDINGS.map(b => (
+              {buildingList.map(b => (
                 <option key={b.id} value={b.name}>{b.icon} {b.name}</option>
               ))}
             </select>
@@ -369,7 +379,10 @@ export default function FloorPlanViewer({
                 {[
                   { id: 'All', label: 'ทั้งหมด' },
                   ...ASSET_CATEGORIES.filter(c => {
-                    if (c.id === 'ประตูกันไฟ') return buildingSupportsFireDoor(activeBuilding);
+                    if (isBuildingOnlyFireExtinguisher(activeBuilding, buildingList)) {
+                      return c.id === 'ถังดับเพลิง';
+                    }
+                    if (c.id === 'ประตูกันไฟ') return buildingSupportsFireDoor(activeBuilding, buildingList);
                     return true;
                   }).map(c => ({ id: c.id, label: `${c.icon} ${c.id}` }))
                 ].map(cat => (

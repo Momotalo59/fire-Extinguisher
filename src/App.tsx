@@ -35,9 +35,11 @@ import {
   deleteExtinguisher, 
   addInspectionLog,
   seedDatabaseIfEmpty,
-  isInspectedInCurrentMonth
+  isInspectedInCurrentMonth,
+  getHospitalBuildings,
+  saveHospitalBuilding
 } from './lib/dbHelpers';
-import { FireExtinguisher, InspectionLog } from './types';
+import { FireExtinguisher, InspectionLog, BuildingInfo } from './types';
 import { cleanInspectorName } from './lib/exportUtils';
 import { ASSET_CATEGORIES, HOSPITAL_BUILDINGS, getAssetCategory, getBuildingEquipmentStats, buildingSupportsFireDoor } from './lib/assetHelpers';
 import { 
@@ -61,6 +63,7 @@ import AllInspectionLogs from './components/AllInspectionLogs';
 import UserManagementModal from './components/UserManagementModal';
 import SafetyGuidelineCard from './components/SafetyGuidelineCard';
 import FloorPlanViewer from './components/FloorPlanViewer';
+import SyncStatusIndicator, { SyncState } from './components/SyncStatusIndicator';
 import { onAuthStateChanged, signOut, User as FirebaseUser } from 'firebase/auth';
 import { doc, getDoc } from 'firebase/firestore';
 import { auth, db } from './lib/firebase';
@@ -69,8 +72,14 @@ export default function App() {
   const { theme, toggleTheme } = useTheme();
   const [extinguishers, setExtinguishers] = useState<FireExtinguisher[]>([]);
   const [logs, setLogs] = useState<InspectionLog[]>([]);
+  const [buildings, setBuildings] = useState<BuildingInfo[]>(HOSPITAL_BUILDINGS);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+
+  // Real-time Sync & Network Connectivity States
+  const [isOnline, setIsOnline] = useState<boolean>(typeof navigator !== 'undefined' ? navigator.onLine : true);
+  const [syncState, setSyncState] = useState<SyncState>('synced');
+  const [lastSyncTime, setLastSyncTime] = useState<Date | null>(new Date());
 
   // Auto-Expiry Alerts & Notifications States
   const [expiryAlerts, setExpiryAlerts] = useState<ExpiryAlertItem[]>([]);
@@ -169,9 +178,10 @@ export default function App() {
   }, []);
 
   // Fetch initial data & seed if empty (only if user is logged in!)
-  const loadData = async () => {
+  const loadData = async (silent = false) => {
     try {
-      setLoading(true);
+      if (!silent) setLoading(true);
+      setSyncState('syncing');
       setError(null);
       
       // Ensure database has standard fire extinguishers to interact with immediately
@@ -180,6 +190,7 @@ export default function App() {
       // Load from Firestore
       let exData = await getExtinguishers();
       const logsData = await getInspectionLogs();
+      const buildingsData = await getHospitalBuildings();
       
       // Auto-sync expiry status in Firestore if expiry date passed or is within 30 days
       const updatedCount = await autoSyncExpiryStatuses(exData);
@@ -189,6 +200,11 @@ export default function App() {
 
       setExtinguishers(exData);
       setLogs(logsData);
+      if (buildingsData && buildingsData.length > 0) {
+        setBuildings(buildingsData);
+      }
+      setSyncState('synced');
+      setLastSyncTime(new Date());
 
       // Compute auto-expiry alerts
       const alerts = checkExpiringExtinguishers(exData);
@@ -213,11 +229,51 @@ export default function App() {
       }
     } catch (err: any) {
       console.error("Error loading data from Firestore:", err);
+      if (!navigator.onLine) {
+        setSyncState('offline');
+      } else {
+        setSyncState('error');
+      }
       setError("ไม่สามารถดึงข้อมูลจากฐานข้อมูล Firebase ได้ กรุณาตรวจสอบอินเทอร์เน็ตหรือตั้งค่า Firebase: " + err.message);
     } finally {
-      setLoading(false);
+      if (!silent) setLoading(false);
     }
   };
+
+  // Real-time network connectivity listeners
+  useEffect(() => {
+    const handleOnline = () => {
+      setIsOnline(true);
+      setSyncState('syncing');
+      if (user) {
+        loadData(true)
+          .then(() => {
+            setSyncState('synced');
+            setLastSyncTime(new Date());
+            triggerToast('เชื่อมต่ออินเทอร์เน็ตแล้ว ซิงค์ข้อมูลกับคลาวด์เรียบร้อย');
+          })
+          .catch(() => {
+            setSyncState('error');
+          });
+      } else {
+        setSyncState('synced');
+      }
+    };
+
+    const handleOffline = () => {
+      setIsOnline(false);
+      setSyncState('offline');
+      triggerToast('สัญญาณอินเทอร์เน็ตขาดหาย สลับเข้าสู่โหมดออฟไลน์ (แคชในเครื่อง)');
+    };
+
+    window.addEventListener('online', handleOnline);
+    window.addEventListener('offline', handleOffline);
+
+    return () => {
+      window.removeEventListener('online', handleOnline);
+      window.removeEventListener('offline', handleOffline);
+    };
+  }, [user]);
 
   // Request browser notification permission helper
   const handleRequestNotificationPermission = async () => {
@@ -249,50 +305,106 @@ export default function App() {
   // Database actions callbacks
   const handleAddExtinguisher = async (newExt: Omit<FireExtinguisher, 'createdAt'>) => {
     try {
+      setSyncState('syncing');
       await addExtinguisher(newExt);
-      await loadData();
+      await loadData(true);
       setSelectedId(newExt.id);
+      setSyncState('synced');
+      setLastSyncTime(new Date());
       triggerToast(`ลงทะเบียนถังดับเพลิง ${newExt.id} สำเร็จ!`);
     } catch (err: any) {
       console.error(err);
+      if (!navigator.onLine) {
+        setSyncState('offline');
+      } else {
+        setSyncState('error');
+      }
       throw err;
     }
   };
 
   const handleEditExtinguisher = async (updatedExt: FireExtinguisher) => {
     try {
+      setSyncState('syncing');
       await updateExtinguisher(updatedExt);
-      await loadData();
+      await loadData(true);
+      setSyncState('synced');
+      setLastSyncTime(new Date());
       triggerToast(`อัปเดตข้อมูลถัง ${updatedExt.id} สำเร็จ`);
     } catch (err: any) {
       console.error(err);
+      if (!navigator.onLine) {
+        setSyncState('offline');
+      } else {
+        setSyncState('error');
+      }
       throw err;
     }
   };
 
   const handleDeleteExtinguisher = async (id: string) => {
     try {
+      setSyncState('syncing');
       await deleteExtinguisher(id);
       if (selectedId === id) {
         setSelectedId(null);
       }
-      await loadData();
+      await loadData(true);
+      setSyncState('synced');
+      setLastSyncTime(new Date());
       triggerToast(`ลบถังดับเพลิง ${id} สำเร็จ`);
     } catch (err: any) {
       console.error(err);
+      if (!navigator.onLine) {
+        setSyncState('offline');
+      } else {
+        setSyncState('error');
+      }
       triggerToast("เกิดข้อผิดพลาดในการลบถังดับเพลิง");
     }
   };
 
   const handleInspectionSubmit = async (newLog: Omit<InspectionLog, 'inspectionId'>) => {
     try {
+      setSyncState('syncing');
       await addInspectionLog(newLog);
-      await loadData();
+      await loadData(true);
       setActiveInspection(null);
       setSelectedId(newLog.feId);
+      setSyncState('synced');
+      setLastSyncTime(new Date());
       triggerToast(`บันทึกการตรวจสอบถัง ${newLog.feId} ผ่านระบบสำเร็จ!`);
     } catch (err: any) {
       console.error(err);
+      if (!navigator.onLine) {
+        setSyncState('offline');
+      } else {
+        setSyncState('error');
+      }
+      throw err;
+    }
+  };
+
+  const handleEditBuilding = async (updatedBuilding: BuildingInfo, oldName?: string) => {
+    try {
+      setSyncState('syncing');
+      await saveHospitalBuilding(
+        updatedBuilding,
+        oldName,
+        userProfile?.fullName || user?.email || 'System'
+      );
+      await loadData(true);
+      setSyncState('synced');
+      setLastSyncTime(new Date());
+      triggerToast(`บันทึกรายละเอียดอาคาร "${updatedBuilding.name}" เรียบร้อยแล้ว`);
+    } catch (err: any) {
+      console.error("Error saving building in App.tsx:", err);
+      if (!navigator.onLine) {
+        setSyncState('offline');
+      } else {
+        setSyncState('error');
+      }
+      triggerToast(`เกิดข้อผิดพลาดในการบันทึกข้อมูลอาคาร: ${err?.message || ''}`);
       throw err;
     }
   };
@@ -409,15 +521,19 @@ export default function App() {
             <span>{currentDate ? currentDate.split(' ')[1] + ' ' + currentDate.split(' ')[2] + ' ' + currentDate.split(' ')[3] : 'กำลังโหลด...'}</span>
           </div>
 
-          {/* Online badge & Digital Clock */}
-          <div className="hidden sm:flex items-center gap-1.5 border-l border-slate-800 pl-2 sm:pl-2.5 shrink-0">
-            <div className="flex items-center gap-1 bg-emerald-950/70 text-emerald-400 border border-emerald-800/50 px-2 py-0.5 rounded-full text-[10px] sm:text-[11px] font-bold shrink-0">
-              <span className="relative flex h-2 w-2">
-                <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75"></span>
-                <span className="relative inline-flex rounded-full h-2 w-2 bg-emerald-500"></span>
-              </span>
-              <span className="hidden md:inline">Online</span>
-            </div>
+          {/* Sync Status Indicator (Real-Time Cloud & Offline Sync State) */}
+          <div className="flex items-center gap-1.5 border-l border-slate-800 pl-1.5 sm:pl-2.5 shrink-0">
+            <SyncStatusIndicator
+              syncState={syncState}
+              isOnline={isOnline}
+              lastSyncTime={lastSyncTime}
+              extinguishersCount={extinguishers.length}
+              logsCount={logs.length}
+              onManualSync={async () => {
+                await loadData(true);
+                triggerToast('ซิงค์ข้อมูลกับระบบคลาวด์สมบูรณ์');
+              }}
+            />
 
             {currentTime && (
               <div className="hidden lg:flex items-center gap-1.5 text-slate-200 font-mono text-xs bg-slate-950/80 px-2 py-0.5 rounded-lg border border-slate-800 shadow-inner shrink-0">
@@ -618,14 +734,14 @@ export default function App() {
                 >
                   <div className="flex items-center gap-2">
                     <Building2 size={16} className="text-blue-400" />
-                    <span>แยกตามอาคาร ({HOSPITAL_BUILDINGS.length})</span>
+                    <span>แยกตามอาคาร ({buildings.length})</span>
                   </div>
                   <ChevronDown size={15} className={`transition-transform duration-200 ${isBuildingSubmenuOpen ? 'rotate-180' : ''}`} />
                 </button>
 
                 {isBuildingSubmenuOpen && (
                   <div className="grid grid-cols-1 sm:grid-cols-2 gap-1.5 pt-1 border-t border-slate-800/60">
-                    {HOSPITAL_BUILDINGS.map((bldg) => {
+                    {buildings.map((bldg) => {
                       const stats = getBuildingEquipmentStats(extinguishers, bldg.name);
                       const isSelected = (currentTab === 'extinguishers' || currentTab === 'floorplan') && selectedBuilding === bldg.name;
 
@@ -718,6 +834,35 @@ export default function App() {
                   <span className="text-[10px] px-2 py-0.5 rounded-md bg-amber-500 text-slate-950 font-black">Admin</span>
                 </button>
               )}
+              {/* 6. Mobile Real-Time Sync Status Box */}
+              <div className="p-3 rounded-xl bg-slate-950/60 border border-slate-800 space-y-2">
+                <div className="flex items-center justify-between">
+                  <span className="text-[11px] font-bold text-slate-300 flex items-center gap-1.5">
+                    <span className="relative flex h-2 w-2">
+                      {syncState === 'syncing' || syncState === 'synced' ? (
+                        <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75"></span>
+                      ) : null}
+                      <span className={`relative inline-flex rounded-full h-2 w-2 ${!isOnline ? 'bg-amber-400' : (syncState === 'syncing' ? 'bg-sky-400' : 'bg-emerald-500')}`}></span>
+                    </span>
+                    <span>สถานะซิงค์: {!isOnline ? 'Offline (โหมดแคช)' : (syncState === 'syncing' ? 'Syncing...' : 'All data synced')}</span>
+                  </span>
+                  <button
+                    type="button"
+                    onClick={async () => {
+                      await loadData(true);
+                      triggerToast('ซิงค์ข้อมูลกับระบบคลาวด์เรียบร้อย');
+                    }}
+                    disabled={syncState === 'syncing'}
+                    className="px-2.5 py-1 bg-slate-800 hover:bg-slate-700 disabled:opacity-50 text-slate-200 text-[10px] font-bold rounded-lg border border-slate-700 transition-colors flex items-center gap-1 cursor-pointer"
+                  >
+                    <span>{syncState === 'syncing' ? 'กำลังซิงค์...' : 'ซิงค์ตอนนี้'}</span>
+                  </button>
+                </div>
+                <div className="text-[10px] text-slate-400 flex items-center justify-between">
+                  <span>ซิงค์ล่าสุด: {lastSyncTime ? lastSyncTime.toLocaleTimeString('th-TH', { hour: '2-digit', minute: '2-digit' }) + ' น.' : '-'}</span>
+                  <span className="text-slate-500 font-mono">แคช: {extinguishers.length} รายการ</span>
+                </div>
+              </div>
             </div>
 
             {/* Quick Actions Footer inside Mobile Menu */}
@@ -891,7 +1036,7 @@ export default function App() {
               >
                 <div className="flex items-center gap-2 md:gap-2.5">
                   <Building2 size={16} className="text-blue-400" />
-                  <span>แยกตามอาคาร ({HOSPITAL_BUILDINGS.length})</span>
+                  <span>แยกตามอาคาร ({buildings.length})</span>
                 </div>
                 <ChevronDown 
                   size={14} 
@@ -902,7 +1047,7 @@ export default function App() {
               {/* Buildings Submenu List */}
               {isBuildingSubmenuOpen && (
                 <div className="flex md:flex-col items-center md:items-stretch gap-1 pl-2 md:pl-3 mt-1 border-l-2 border-blue-900/40 ml-2 md:ml-3">
-                  {HOSPITAL_BUILDINGS.map((bldg) => {
+                  {buildings.map((bldg) => {
                     const stats = getBuildingEquipmentStats(extinguishers, bldg.name);
                     const isSelected = currentTab === 'extinguishers' && selectedBuilding === bldg.name;
 
@@ -1252,6 +1397,7 @@ export default function App() {
                       <div className="lg:col-span-7 h-[calc(100vh-250px)] min-h-[500px]">
                         <ExtinguisherList 
                           extinguishers={extinguishers}
+                          buildings={buildings}
                           selectedId={selectedId}
                           selectedStatusFilter={selectedStatusFilter}
                           selectedAssetCategory={selectedAssetCategory}
@@ -1273,6 +1419,7 @@ export default function App() {
                           onAddExtinguisher={handleAddExtinguisher}
                           onEditExtinguisher={handleEditExtinguisher}
                           onDeleteExtinguisher={handleDeleteExtinguisher}
+                          onEditBuilding={handleEditBuilding}
                           onOpenFloorPlan={() => setCurrentTab('floorplan')}
                           isAdmin={userProfile?.role === 'Admin'}
                         />
@@ -1309,6 +1456,7 @@ export default function App() {
                   >
                     <FloorPlanViewer 
                       extinguishers={extinguishers}
+                      buildings={buildings}
                       selectedBuilding={selectedBuilding}
                       selectedAssetCategory={selectedAssetCategory}
                       selectedId={selectedId}

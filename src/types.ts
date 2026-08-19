@@ -112,6 +112,22 @@ export interface InspectionLog {
   notes: string;
 }
 
+export interface BuildingInfo {
+  id: string; // e.g. "อาคารอำนวยการ" or "BLD-01"
+  name: string;
+  icon: string;
+  desc?: string;
+  floors?: string[];
+  totalFloors?: number;
+  department?: string;
+  contactPerson?: string;
+  notes?: string;
+  color?: string;
+  hasFireDoor?: boolean;
+  onlyFireExtinguisher?: boolean;
+  updatedAt?: string;
+}
+
 export interface UserProfile {
   uid: string;
   email: string;

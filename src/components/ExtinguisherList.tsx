@@ -26,17 +26,25 @@ import {
   ChevronDown,
   ChevronUp
 } from 'lucide-react';
-import { FireExtinguisher, ExtinguisherType, ExtinguisherStatus, AssetType, InspectionLog } from '../types';
+import { FireExtinguisher, ExtinguisherType, ExtinguisherStatus, AssetType, InspectionLog, BuildingInfo } from '../types';
 import PhotoUploader from './PhotoUploader';
 import { exportExtinguishersToExcel, exportExtinguishersToPDF } from '../lib/exportUtils';
 import { isInspectedInCurrentMonth } from '../lib/dbHelpers';
-import { HOSPITAL_BUILDINGS, buildingSupportsFireDoor, getBuildingEquipmentStats } from '../lib/assetHelpers';
+import { 
+  HOSPITAL_BUILDINGS, 
+  buildingSupportsFireDoor, 
+  isBuildingOnlyFireExtinguisher, 
+  getAllowedAssetCategoriesForBuilding, 
+  getBuildingEquipmentStats 
+} from '../lib/assetHelpers';
 import QRCodeModal from './QRCodeModal';
 import MonthlyReportModal from './MonthlyReportModal';
+import { BuildingEditModal } from './BuildingEditModal';
 
 interface ExtinguisherListProps {
   extinguishers: FireExtinguisher[];
   logs?: InspectionLog[];
+  buildings?: BuildingInfo[];
   selectedId: string | null;
   selectedStatusFilter: string | null;
   selectedAssetCategory?: string;
@@ -51,6 +59,7 @@ interface ExtinguisherListProps {
   onAddExtinguisher: (extinguisher: Omit<FireExtinguisher, 'createdAt'>) => Promise<void>;
   onEditExtinguisher: (extinguisher: FireExtinguisher) => Promise<void>;
   onDeleteExtinguisher: (id: string) => Promise<void>;
+  onEditBuilding?: (building: BuildingInfo, oldName?: string) => Promise<void>;
   onOpenFloorPlan?: () => void;
   isAdmin?: boolean;
   userDisplayName?: string;
@@ -59,6 +68,7 @@ interface ExtinguisherListProps {
 export default function ExtinguisherList({
   extinguishers,
   logs = [],
+  buildings,
   selectedId,
   selectedStatusFilter,
   selectedAssetCategory: selectedAssetCategoryProp,
@@ -73,10 +83,18 @@ export default function ExtinguisherList({
   onAddExtinguisher,
   onEditExtinguisher,
   onDeleteExtinguisher,
+  onEditBuilding,
   onOpenFloorPlan,
   isAdmin = false,
   userDisplayName = 'นายช่างเทคนิคประจำเวร'
 }: ExtinguisherListProps) {
+  const buildingsList = React.useMemo(() => {
+    return buildings && buildings.length > 0 ? buildings : HOSPITAL_BUILDINGS;
+  }, [buildings]);
+
+  const [isBuildingEditOpen, setIsBuildingEditOpen] = useState(false);
+  const [selectedBuildingToEdit, setSelectedBuildingToEdit] = useState<BuildingInfo | null>(null);
+
   const [searchTerm, setSearchTerm] = useState('');
   const [selectedType, setSelectedType] = useState<string>('All');
   const [internalCategory, setInternalCategory] = useState<string>('All');
@@ -96,6 +114,9 @@ export default function ExtinguisherList({
 
   const handleSelectBuilding = (b: string) => {
     setInternalBuilding(b);
+    if (isBuildingOnlyFireExtinguisher(b, buildingsList) && selectedAssetCategory !== 'All' && selectedAssetCategory !== 'ถังดับเพลิง') {
+      handleSelectAssetCategory('All');
+    }
     if (onSelectBuilding) {
       onSelectBuilding(b);
     }
@@ -534,7 +555,11 @@ export default function ExtinguisherList({
               <button
                 onClick={() => {
                   setFormId('');
-                  const cat = selectedAssetCategory === 'All' ? 'ถังดับเพลิง' : (selectedAssetCategory as AssetType);
+                  const initialBuilding = selectedBuilding && selectedBuilding !== 'All' ? selectedBuilding : 'อาคารหมอบริกส์';
+                  const isOnlyExt = isBuildingOnlyFireExtinguisher(initialBuilding, buildingsList);
+                  const cat = isOnlyExt 
+                    ? 'ถังดับเพลิง' 
+                    : (selectedAssetCategory === 'All' ? 'ถังดับเพลิง' : (selectedAssetCategory as AssetType));
                   setFormAssetType(cat);
                   setFormSerialNumber('');
                   setFormBrand(cat === 'ตู้แจ้งเหตุเพลิงไหม้' ? 'Notifier' : (cat === 'ไฟฉุกเฉิน' || cat === 'ป้ายบอกทางหนีไฟ') ? 'Max Bright' : '');
@@ -563,8 +588,8 @@ export default function ExtinguisherList({
                       ? '-'
                       : '15 lbs'
                   );
-                  setFormBuilding(selectedBuilding && selectedBuilding !== 'All' ? selectedBuilding : 'อาคารหมอบริกส์');
-                  setFormFloor('ชั้น 1');
+                  setFormBuilding(initialBuilding);
+                  setFormFloor(initialBuilding.includes('รถ') ? 'บนรถ' : 'ชั้น 1');
                   setFormLat('19.9075');
                   setFormLng('99.8294');
                   setFormPhotoUrl('');
@@ -583,32 +608,42 @@ export default function ExtinguisherList({
 
         {/* Asset Category Selector Tabs */}
         <div className="flex items-center gap-1.5 overflow-x-auto pb-0.5">
-          {[
-            { id: 'ถังดับเพลิง', label: '🧯 ถังดับเพลิง', count: extinguishers.filter(e => getAssetCategory(e) === 'ถังดับเพลิง' && (selectedBuilding === 'All' || !selectedBuilding || e.building === selectedBuilding)).length },
-            { id: 'ตู้ดับเพลิง', label: '🗄️ ตู้ดับเพลิง', count: extinguishers.filter(e => getAssetCategory(e) === 'ตู้ดับเพลิง' && (selectedBuilding === 'All' || !selectedBuilding || e.building === selectedBuilding)).length },
-            // แสดงแท็บประตูกันไฟเฉพาะเมื่อเลือกดูทุกอาคาร หรือเลือกอาคารหมอกัมพล/หมอบริกส์
-            ...((!selectedBuilding || selectedBuilding === 'All' || buildingSupportsFireDoor(selectedBuilding)) ? [{
-              id: 'ประตูกันไฟ',
-              label: '🚪 ประตูกันไฟ',
-              count: extinguishers.filter(e => getAssetCategory(e) === 'ประตูกันไฟ' && (selectedBuilding === 'All' || !selectedBuilding || e.building === selectedBuilding)).length
-            }] : []),
-            { id: 'ตู้แจ้งเหตุเพลิงไหม้', label: '🚨 ตู้แจ้งเหตุเพลิงไหม้ (FCP)', count: extinguishers.filter(e => getAssetCategory(e) === 'ตู้แจ้งเหตุเพลิงไหม้' && (selectedBuilding === 'All' || !selectedBuilding || e.building === selectedBuilding)).length },
-            { id: 'ไฟฉุกเฉิน', label: '💡 ไฟฉุกเฉิน', count: extinguishers.filter(e => getAssetCategory(e) === 'ไฟฉุกเฉิน' && (selectedBuilding === 'All' || !selectedBuilding || e.building === selectedBuilding)).length },
-            { id: 'ป้ายบอกทางหนีไฟ', label: '🏃 ป้ายบอกทางหนีไฟ', count: extinguishers.filter(e => getAssetCategory(e) === 'ป้ายบอกทางหนีไฟ' && (selectedBuilding === 'All' || !selectedBuilding || e.building === selectedBuilding)).length },
-            { id: 'All', label: 'รวมทั้งหมด', count: extinguishers.filter(e => selectedBuilding === 'All' || !selectedBuilding || e.building === selectedBuilding).length }
-          ].map(tab => (
-            <button
-              key={tab.id}
-              onClick={() => handleSelectAssetCategory(tab.id)}
-              className={`py-1.5 px-3 rounded-lg text-xs font-bold whitespace-nowrap transition-all cursor-pointer ${
-                selectedAssetCategory === tab.id
-                  ? 'bg-red-600 text-white shadow-xs font-extrabold'
-                  : 'bg-slate-900 border border-slate-800 text-slate-400 hover:text-slate-200 hover:bg-slate-850'
-              }`}
-            >
-              {tab.label} ({tab.count})
-            </button>
-          ))}
+          {(() => {
+            const isOnlyExt = isBuildingOnlyFireExtinguisher(selectedBuilding, buildingsList);
+            const tabs = isOnlyExt
+              ? [
+                  { id: 'ถังดับเพลิง', label: '🧯 ถังดับเพลิง', count: extinguishers.filter(e => getAssetCategory(e) === 'ถังดับเพลิง' && (selectedBuilding === 'All' || !selectedBuilding || e.building === selectedBuilding)).length },
+                  { id: 'All', label: 'รวมทั้งหมด', count: extinguishers.filter(e => selectedBuilding === 'All' || !selectedBuilding || e.building === selectedBuilding).length }
+                ]
+              : [
+                  { id: 'ถังดับเพลิง', label: '🧯 ถังดับเพลิง', count: extinguishers.filter(e => getAssetCategory(e) === 'ถังดับเพลิง' && (selectedBuilding === 'All' || !selectedBuilding || e.building === selectedBuilding)).length },
+                  { id: 'ตู้ดับเพลิง', label: '🗄️ ตู้ดับเพลิง', count: extinguishers.filter(e => getAssetCategory(e) === 'ตู้ดับเพลิง' && (selectedBuilding === 'All' || !selectedBuilding || e.building === selectedBuilding)).length },
+                  // แสดงแท็บประตูกันไฟเฉพาะเมื่อเลือกดูทุกอาคาร หรือเลือกอาคารที่รองรับ
+                  ...((!selectedBuilding || selectedBuilding === 'All' || buildingSupportsFireDoor(selectedBuilding, buildingsList)) ? [{
+                    id: 'ประตูกันไฟ',
+                    label: '🚪 ประตูกันไฟ',
+                    count: extinguishers.filter(e => getAssetCategory(e) === 'ประตูกันไฟ' && (selectedBuilding === 'All' || !selectedBuilding || e.building === selectedBuilding)).length
+                  }] : []),
+                  { id: 'ตู้แจ้งเหตุเพลิงไหม้', label: '🚨 ตู้แจ้งเหตุเพลิงไหม้ (FCP)', count: extinguishers.filter(e => getAssetCategory(e) === 'ตู้แจ้งเหตุเพลิงไหม้' && (selectedBuilding === 'All' || !selectedBuilding || e.building === selectedBuilding)).length },
+                  { id: 'ไฟฉุกเฉิน', label: '💡 ไฟฉุกเฉิน', count: extinguishers.filter(e => getAssetCategory(e) === 'ไฟฉุกเฉิน' && (selectedBuilding === 'All' || !selectedBuilding || e.building === selectedBuilding)).length },
+                  { id: 'ป้ายบอกทางหนีไฟ', label: '🏃 ป้ายบอกทางหนีไฟ', count: extinguishers.filter(e => getAssetCategory(e) === 'ป้ายบอกทางหนีไฟ' && (selectedBuilding === 'All' || !selectedBuilding || e.building === selectedBuilding)).length },
+                  { id: 'All', label: 'รวมทั้งหมด', count: extinguishers.filter(e => selectedBuilding === 'All' || !selectedBuilding || e.building === selectedBuilding).length }
+                ];
+
+            return tabs.map(tab => (
+              <button
+                key={tab.id}
+                onClick={() => handleSelectAssetCategory(tab.id)}
+                className={`py-1.5 px-3 rounded-lg text-xs font-bold whitespace-nowrap transition-all cursor-pointer ${
+                  selectedAssetCategory === tab.id
+                    ? 'bg-red-600 text-white shadow-xs font-extrabold'
+                    : 'bg-slate-900 border border-slate-800 text-slate-400 hover:text-slate-200 hover:bg-slate-850'
+                }`}
+              >
+                {tab.label} ({tab.count})
+              </button>
+            ));
+          })()}
         </div>
 
         {/* Search and Filters */}
@@ -638,7 +673,7 @@ export default function ExtinguisherList({
               className="w-full pl-7 pr-3 py-1.5 border border-slate-800 rounded-lg text-xs focus:ring-1 focus:ring-blue-500 focus:border-blue-500 focus:outline-none text-slate-200 bg-slate-900 appearance-none cursor-pointer font-medium"
             >
               <option value="All">ทุกอาคารรวม</option>
-              {HOSPITAL_BUILDINGS.map(b => (
+              {buildingsList.map(b => (
                 <option key={b.id} value={b.name}>{b.icon} {b.name}</option>
               ))}
             </select>
@@ -703,11 +738,12 @@ export default function ExtinguisherList({
       <div id="ext-list-container" className="flex-1 overflow-y-auto divide-y divide-slate-800">
         {/* Building Summary & Breakdown Panel (when a specific building is selected) */}
         {selectedBuilding && selectedBuilding !== 'All' && (() => {
-          const bldgInfo = HOSPITAL_BUILDINGS.find(b => b.name === selectedBuilding);
-          const buildingStats = getBuildingEquipmentStats(extinguishers, selectedBuilding);
+          const bldgInfo = buildingsList.find(b => b.name === selectedBuilding || b.id === selectedBuilding);
+          const buildingStats = getBuildingEquipmentStats(extinguishers, selectedBuilding, buildingsList);
+          const isOnlyExt = isBuildingOnlyFireExtinguisher(selectedBuilding, buildingsList);
 
           return (
-            <div className="p-4 bg-gradient-to-br from-slate-950 via-slate-900 to-slate-950 border-b border-slate-800 space-y-3.5">
+            <div id="building-summary-panel" className="p-4 bg-slate-900/85 border-b border-slate-800 space-y-3.5 transition-colors">
               {/* Building Title & Summary Bar */}
               <div className="flex flex-wrap items-center justify-between gap-2.5 pb-2.5 border-b border-slate-800/80">
                 <div className="flex items-center gap-2.5">
@@ -715,19 +751,55 @@ export default function ExtinguisherList({
                     {bldgInfo?.icon || '🏢'}
                   </div>
                   <div>
-                    <div className="flex items-center gap-2">
+                    <div className="flex items-center gap-2 flex-wrap">
                       <h4 className="font-extrabold text-white text-sm md:text-base">{selectedBuilding}</h4>
                       <span className="bg-blue-900/60 text-blue-300 text-[11px] px-2 py-0.5 rounded-full font-bold border border-blue-800/50">
                         รวม {buildingStats.total} รายการ
                       </span>
+                      {isOnlyExt && (
+                        <span className="bg-amber-950/70 text-amber-300 text-[10px] px-2 py-0.5 rounded-full font-bold border border-amber-800/60 flex items-center gap-1">
+                          🧯 มีเฉพาะถังดับเพลิง
+                        </span>
+                      )}
+                      {bldgInfo?.totalFloors && (
+                        <span className="text-[10px] text-slate-400 bg-slate-800/80 px-2 py-0.5 rounded-md font-medium border border-slate-700/50">
+                          {bldgInfo.totalFloors} ชั้น
+                        </span>
+                      )}
                     </div>
-                    {bldgInfo?.desc && (
-                      <p className="text-[11px] text-slate-400 mt-0.5">{bldgInfo.desc}</p>
+                    {(bldgInfo?.desc || bldgInfo?.department) && (
+                      <p className="text-[11px] text-slate-400 mt-0.5 flex flex-wrap items-center gap-2">
+                        {bldgInfo?.desc && <span>{bldgInfo.desc}</span>}
+                        {bldgInfo?.department && (
+                          <span className="text-[10px] text-blue-400 bg-blue-950/40 px-1.5 py-0.2 rounded border border-blue-900/40 font-medium">
+                            {bldgInfo.department}
+                          </span>
+                        )}
+                        {bldgInfo?.contactPerson && (
+                          <span className="text-[10px] text-slate-400">
+                            📞 {bldgInfo.contactPerson}
+                          </span>
+                        )}
+                      </p>
                     )}
                   </div>
                 </div>
 
-                <div className="flex items-center gap-1.5">
+                <div className="flex items-center gap-1.5 flex-wrap">
+                  {/* Edit Building Details Button */}
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setSelectedBuildingToEdit(bldgInfo || { id: selectedBuilding, name: selectedBuilding, icon: '🏢' });
+                      setIsBuildingEditOpen(true);
+                    }}
+                    className="text-xs text-blue-400 hover:text-white px-2.5 py-1.5 rounded-lg bg-blue-950/70 hover:bg-blue-900 border border-blue-800/80 transition cursor-pointer flex items-center gap-1.5 font-bold shadow-xs"
+                    title="แก้ไขรายละเอียดและข้อมูลอาคารนี้"
+                  >
+                    <Edit3 size={12} />
+                    <span>แก้ไขข้อมูลอาคาร</span>
+                  </button>
+
                   <button
                     onClick={() => setIsBuildingStatsOpen(!isBuildingStatsOpen)}
                     className="text-xs text-slate-300 hover:text-white px-2.5 py-1.5 rounded-lg bg-slate-850 hover:bg-slate-800 border border-slate-700/60 transition cursor-pointer flex items-center gap-1 font-medium"
@@ -1075,24 +1147,39 @@ export default function ExtinguisherList({
 
                   <div>
                     <label className="block text-xs font-bold text-slate-300 mb-1">ประเภทอุปกรณ์ *</label>
-                    <select
-                      value={formAssetType}
-                      onChange={(e) => {
-                        const newType = e.target.value as AssetType;
-                        handleAssetTypeChange(newType);
-                        if (newType === 'ประตูกันไฟ' && !buildingSupportsFireDoor(formBuilding)) {
-                          setFormBuilding('อาคารหมอกัมพล');
-                        }
-                      }}
-                      className="w-full p-2 border border-slate-800 rounded-lg text-xs focus:ring-1 focus:ring-red-500 focus:border-red-500 focus:outline-none bg-slate-950 text-slate-200 font-bold cursor-pointer"
-                    >
-                      <option value="ถังดับเพลิง">🧯 ถังดับเพลิง (Fire Extinguisher)</option>
-                      <option value="ตู้ดับเพลิง">🗄️ ตู้ดับเพลิง (Fire Hose Cabinet)</option>
-                      <option value="ประตูกันไฟ">🚪 ประตูกันไฟอัตโนมัติ (Fire Door - มีเฉพาะอาคารหมอกัมพล/หมอบริกส์)</option>
-                      <option value="ตู้แจ้งเหตุเพลิงไหม้">🚨 ตู้แจ้งเหตุเพลิงไหม้ (Fire Alarm Control Panel - FCP)</option>
-                      <option value="ไฟฉุกเฉิน">💡 ไฟฉุกเฉิน (Emergency Light)</option>
-                      <option value="ป้ายบอกทางหนีไฟ">🏃 ป้ายบอกทางหนีไฟ (Exit Sign)</option>
-                    </select>
+                    {isBuildingOnlyFireExtinguisher(formBuilding, buildingsList) ? (
+                      <div className="space-y-1.5">
+                        <select
+                          value="ถังดับเพลิง"
+                          disabled
+                          className="w-full p-2 border border-amber-900/60 rounded-lg text-xs bg-amber-950/30 text-amber-200 font-bold cursor-not-allowed"
+                        >
+                          <option value="ถังดับเพลิง">🧯 ถังดับเพลิง (Fire Extinguisher)</option>
+                        </select>
+                        <p className="text-[11px] text-amber-400/90 flex items-center gap-1">
+                          <span>ℹ️ "{formBuilding}" กำหนดให้ติดตั้งเฉพาะถังดับเพลิงเท่านั้น</span>
+                        </p>
+                      </div>
+                    ) : (
+                      <select
+                        value={formAssetType}
+                        onChange={(e) => {
+                          const newType = e.target.value as AssetType;
+                          handleAssetTypeChange(newType);
+                          if (newType === 'ประตูกันไฟ' && !buildingSupportsFireDoor(formBuilding, buildingsList)) {
+                            setFormBuilding('อาคารหมอกัมพล');
+                          }
+                        }}
+                        className="w-full p-2 border border-slate-800 rounded-lg text-xs focus:ring-1 focus:ring-red-500 focus:border-red-500 focus:outline-none bg-slate-950 text-slate-200 font-bold cursor-pointer"
+                      >
+                        <option value="ถังดับเพลิง">🧯 ถังดับเพลิง (Fire Extinguisher)</option>
+                        <option value="ตู้ดับเพลิง">🗄️ ตู้ดับเพลิง (Fire Hose Cabinet)</option>
+                        <option value="ประตูกันไฟ">🚪 ประตูกันไฟอัตโนมัติ (Fire Door - มีเฉพาะอาคารหมอกัมพล/หมอบริกส์)</option>
+                        <option value="ตู้แจ้งเหตุเพลิงไหม้">🚨 ตู้แจ้งเหตุเพลิงไหม้ (Fire Alarm Control Panel - FCP)</option>
+                        <option value="ไฟฉุกเฉิน">💡 ไฟฉุกเฉิน (Emergency Light)</option>
+                        <option value="ป้ายบอกทางหนีไฟ">🏃 ป้ายบอกทางหนีไฟ (Exit Sign)</option>
+                      </select>
+                    )}
                   </div>
 
                   {formAssetType === 'ตู้แจ้งเหตุเพลิงไหม้' || formAssetType === 'ไฟฉุกเฉิน' || formAssetType === 'ป้ายบอกทางหนีไฟ' ? (
@@ -1286,10 +1373,17 @@ export default function ExtinguisherList({
                     </label>
                     <div className="space-y-1.5">
                       <select
-                        value={HOSPITAL_BUILDINGS.some(b => b.name === formBuilding) ? formBuilding : 'OTHER'}
+                        value={buildingsList.some(b => b.name === formBuilding) ? formBuilding : 'OTHER'}
                         onChange={(e) => {
                           if (e.target.value !== 'OTHER') {
-                            setFormBuilding(e.target.value);
+                            const newBldg = e.target.value;
+                            setFormBuilding(newBldg);
+                            if (isBuildingOnlyFireExtinguisher(newBldg, buildingsList)) {
+                              handleAssetTypeChange('ถังดับเพลิง');
+                            }
+                            if (newBldg.includes('รถ') && (!formFloor || formFloor === 'ชั้น 1')) {
+                              setFormFloor('บนรถ');
+                            }
                           } else {
                             setFormBuilding('');
                           }
@@ -1297,14 +1391,16 @@ export default function ExtinguisherList({
                         className="w-full p-2 border border-slate-800 rounded-lg text-xs focus:ring-1 focus:ring-red-500 focus:border-red-500 focus:outline-none font-medium text-slate-200 bg-slate-950 cursor-pointer"
                       >
                         {(formAssetType === 'ประตูกันไฟ' 
-                          ? HOSPITAL_BUILDINGS.filter(b => buildingSupportsFireDoor(b.name))
-                          : HOSPITAL_BUILDINGS
+                          ? buildingsList.filter(b => buildingSupportsFireDoor(b.name, buildingsList))
+                          : formAssetType !== 'ถังดับเพลิง'
+                          ? buildingsList.filter(b => !isBuildingOnlyFireExtinguisher(b.name, buildingsList))
+                          : buildingsList
                         ).map(b => (
                           <option key={b.id} value={b.name}>{b.icon} {b.name}</option>
                         ))}
                         {formAssetType !== 'ประตูกันไฟ' && <option value="OTHER">✏️ ระบุอาคารอื่นๆ...</option>}
                       </select>
-                      {formAssetType !== 'ประตูกันไฟ' && !HOSPITAL_BUILDINGS.some(b => b.name === formBuilding) && (
+                      {formAssetType !== 'ประตูกันไฟ' && !buildingsList.some(b => b.name === formBuilding) && (
                         <input
                           type="text"
                           placeholder="ระบุชื่ออาคาร..."
@@ -1542,18 +1638,39 @@ export default function ExtinguisherList({
 
                   <div>
                     <label className="block text-xs font-bold text-slate-300 mb-1">ประเภทอุปกรณ์ *</label>
-                    <select
-                      value={formAssetType}
-                      onChange={(e) => handleAssetTypeChange(e.target.value as AssetType)}
-                      className="w-full p-2 border border-slate-800 rounded-lg text-xs focus:ring-1 focus:ring-red-500 focus:border-red-500 focus:outline-none bg-slate-950 text-slate-200 font-bold cursor-pointer"
-                    >
-                      <option value="ถังดับเพลิง">🧯 ถังดับเพลิง (Fire Extinguisher)</option>
-                      <option value="ตู้ดับเพลิง">🗄️ ตู้ดับเพลิง (Fire Hose Cabinet)</option>
-                      <option value="ประตูกันไฟ">🚪 ประตูกันไฟอัตโนมัติ (Fire Door)</option>
-                      <option value="ตู้แจ้งเหตุเพลิงไหม้">🚨 ตู้แจ้งเหตุเพลิงไหม้ (Fire Alarm Control Panel - FCP)</option>
-                      <option value="ไฟฉุกเฉิน">💡 ไฟฉุกเฉิน (Emergency Light)</option>
-                      <option value="ป้ายบอกทางหนีไฟ">🏃 ป้ายบอกทางหนีไฟ (Exit Sign)</option>
-                    </select>
+                    {isBuildingOnlyFireExtinguisher(formBuilding, buildingsList) ? (
+                      <div className="space-y-1.5">
+                        <select
+                          value="ถังดับเพลิง"
+                          disabled
+                          className="w-full p-2 border border-amber-900/60 rounded-lg text-xs bg-amber-950/30 text-amber-200 font-bold cursor-not-allowed"
+                        >
+                          <option value="ถังดับเพลิง">🧯 ถังดับเพลิง (Fire Extinguisher)</option>
+                        </select>
+                        <p className="text-[11px] text-amber-400/90 flex items-center gap-1">
+                          <span>ℹ️ "{formBuilding}" กำหนดให้ติดตั้งเฉพาะถังดับเพลิงเท่านั้น</span>
+                        </p>
+                      </div>
+                    ) : (
+                      <select
+                        value={formAssetType}
+                        onChange={(e) => {
+                          const newType = e.target.value as AssetType;
+                          handleAssetTypeChange(newType);
+                          if (newType === 'ประตูกันไฟ' && !buildingSupportsFireDoor(formBuilding, buildingsList)) {
+                            setFormBuilding('อาคารหมอกัมพล');
+                          }
+                        }}
+                        className="w-full p-2 border border-slate-800 rounded-lg text-xs focus:ring-1 focus:ring-red-500 focus:border-red-500 focus:outline-none bg-slate-950 text-slate-200 font-bold cursor-pointer"
+                      >
+                        <option value="ถังดับเพลิง">🧯 ถังดับเพลิง (Fire Extinguisher)</option>
+                        <option value="ตู้ดับเพลิง">🗄️ ตู้ดับเพลิง (Fire Hose Cabinet)</option>
+                        <option value="ประตูกันไฟ">🚪 ประตูกันไฟอัตโนมัติ (Fire Door - มีเฉพาะอาคารที่รองรับ)</option>
+                        <option value="ตู้แจ้งเหตุเพลิงไหม้">🚨 ตู้แจ้งเหตุเพลิงไหม้ (Fire Alarm Control Panel - FCP)</option>
+                        <option value="ไฟฉุกเฉิน">💡 ไฟฉุกเฉิน (Emergency Light)</option>
+                        <option value="ป้ายบอกทางหนีไฟ">🏃 ป้ายบอกทางหนีไฟ (Exit Sign)</option>
+                      </select>
+                    )}
                   </div>
 
                   {(formAssetType === 'ตู้แจ้งเหตุเพลิงไหม้' || formAssetType === 'ไฟฉุกเฉิน' || formAssetType === 'ป้ายบอกทางหนีไฟ') && (
@@ -1710,10 +1827,17 @@ export default function ExtinguisherList({
                     </label>
                     <div className="space-y-1.5">
                       <select
-                        value={HOSPITAL_BUILDINGS.some(b => b.name === formBuilding) ? formBuilding : 'OTHER'}
+                        value={buildingsList.some(b => b.name === formBuilding) ? formBuilding : 'OTHER'}
                         onChange={(e) => {
                           if (e.target.value !== 'OTHER') {
-                            setFormBuilding(e.target.value);
+                            const newBldg = e.target.value;
+                            setFormBuilding(newBldg);
+                            if (isBuildingOnlyFireExtinguisher(newBldg, buildingsList)) {
+                              handleAssetTypeChange('ถังดับเพลิง');
+                            }
+                            if (newBldg.includes('รถ') && (!formFloor || formFloor === 'ชั้น 1')) {
+                              setFormFloor('บนรถ');
+                            }
                           } else {
                             setFormBuilding('');
                           }
@@ -1721,14 +1845,16 @@ export default function ExtinguisherList({
                         className="w-full p-2 border border-slate-800 rounded-lg text-xs focus:ring-1 focus:ring-red-500 focus:border-red-500 focus:outline-none font-medium text-slate-200 bg-slate-950 cursor-pointer"
                       >
                         {(formAssetType === 'ประตูกันไฟ' 
-                          ? HOSPITAL_BUILDINGS.filter(b => buildingSupportsFireDoor(b.name))
-                          : HOSPITAL_BUILDINGS
+                          ? buildingsList.filter(b => buildingSupportsFireDoor(b.name, buildingsList))
+                          : formAssetType !== 'ถังดับเพลิง'
+                          ? buildingsList.filter(b => !isBuildingOnlyFireExtinguisher(b.name, buildingsList))
+                          : buildingsList
                         ).map(b => (
                           <option key={b.id} value={b.name}>{b.icon} {b.name}</option>
                         ))}
                         {formAssetType !== 'ประตูกันไฟ' && <option value="OTHER">✏️ ระบุอาคารอื่นๆ...</option>}
                       </select>
-                      {formAssetType !== 'ประตูกันไฟ' && !HOSPITAL_BUILDINGS.some(b => b.name === formBuilding) && (
+                      {formAssetType !== 'ประตูกันไฟ' && !buildingsList.some(b => b.name === formBuilding) && (
                         <input
                           type="text"
                           placeholder="ระบุชื่ออาคาร..."
@@ -2045,6 +2171,23 @@ export default function ExtinguisherList({
           />
         )}
       </AnimatePresence>
+
+      {/* Building Edit Modal */}
+      <BuildingEditModal
+        isOpen={isBuildingEditOpen}
+        onClose={() => {
+          setIsBuildingEditOpen(false);
+          setSelectedBuildingToEdit(null);
+        }}
+        building={selectedBuildingToEdit}
+        allBuildings={buildingsList}
+        onSave={async (updated, oldName) => {
+          if (onEditBuilding) {
+            await onEditBuilding(updated, oldName);
+          }
+        }}
+        isAdmin={isAdmin}
+      />
     </div>
   );
 }

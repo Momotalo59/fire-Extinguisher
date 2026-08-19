@@ -587,3 +587,58 @@ button, input, select, textarea {
 .light-theme .recharts-tooltip-item {
   color: #1e293b !important;
 }
+
+/* =========================================================================
+   BUILDING SUMMARY PANEL & BUILDING DETAILS LIGHT THEME REFINEMENTS
+   ========================================================================= */
+
+[data-theme="light"] #building-summary-panel,
+.light-theme #building-summary-panel {
+  background: #f8fafc !important;
+  background-image: none !important;
+  border-color: #e2e8f0 !important;
+  color: #0f172a !important;
+}
+
+[data-theme="light"] #building-summary-panel [class*="bg-blue-950"],
+.light-theme #building-summary-panel [class*="bg-blue-950"] {
+  background-color: #eff6ff !important;
+  border-color: #bfdbfe !important;
+  color: #1d4ed8 !important;
+}
+
+[data-theme="light"] #building-summary-panel .bg-blue-900\/60,
+.light-theme #building-summary-panel .bg-blue-900\/60 {
+  background-color: #dbeafe !important;
+  color: #1e40af !important;
+  border-color: #bfdbfe !important;
+}
+
+[data-theme="light"] #building-summary-panel h4,
+.light-theme #building-summary-panel h4 {
+  color: #0f172a !important;
+}
+
+[data-theme="light"] #building-summary-panel .text-white,
+.light-theme #building-summary-panel .text-white {
+  color: #0f172a !important;
+}
+
+[data-theme="light"] #building-summary-panel .bg-slate-950\/90,
+[data-theme="light"] #building-summary-panel .bg-slate-950\/70,
+[data-theme="light"] #building-summary-panel .bg-slate-900\/90,
+.light-theme #building-summary-panel .bg-slate-950\/90,
+.light-theme #building-summary-panel .bg-slate-950\/70,
+.light-theme #building-summary-panel .bg-slate-900\/90 {
+  background-color: #ffffff !important;
+  border-color: #e2e8f0 !important;
+  box-shadow: 0 1px 3px 0 rgb(0 0 0 / 0.04) !important;
+}
+
+[data-theme="light"] #building-summary-panel .bg-slate-850,
+.light-theme #building-summary-panel .bg-slate-850 {
+  background-color: #f1f5f9 !important;
+  border-color: #e2e8f0 !important;
+  color: #334155 !important;
+}
+

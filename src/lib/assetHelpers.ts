@@ -1,4 +1,6 @@
-import { FireExtinguisher, AssetType, ExtinguisherStatus } from '../types';
+import { FireExtinguisher, AssetType, ExtinguisherStatus, BuildingInfo } from '../types';
+
+export type { BuildingInfo };
 
 export const ASSET_CATEGORIES: { id: AssetType; name: string; icon: string; cycle: string; desc: string; color: string; badgeColor: string }[] = [
   {
@@ -57,27 +59,58 @@ export const ASSET_CATEGORIES: { id: AssetType; name: string; icon: string; cycl
   }
 ];
 
-export interface BuildingInfo {
-  id: string;
-  name: string;
-  icon: string;
-  desc?: string;
-}
-
-export const HOSPITAL_BUILDINGS: BuildingInfo[] = [
-  { id: 'อาคารอำนวยการ', name: 'อาคารอำนวยการ', icon: '🏢', desc: 'งานบริหาร, ตรวจสุขภาพ, เวชระเบียน' },
-  { id: 'อาคารหมอบริกส์', name: 'อาคารหมอบริกส์', icon: '🏥', desc: 'OPD, คลังยา, ศูนย์คอมพิวเตอร์ IT' },
-  { id: 'อาคารหมอกัมพล', name: 'อาคารหมอกัมพล', icon: '🏨', desc: 'IPD หอผู้ป่วย, ห้องผ่าตัด, ICU' },
-  { id: 'อาคารซักรีด-โภชนาการ', name: 'อาคารซักรีด-โภชนาการ', icon: '🧺', desc: 'ฝ่ายโภชนาการ, ซักฟอก, สโตร์กลาง' },
-  { id: 'อาคารกายภาพ-คลังยา', name: 'อาคารกายภาพ-คลังยา', icon: '💊', desc: 'เวชศาสตร์ฟื้นฟู, กายภาพบำบัด, คลังยาหลัก' },
-  { id: 'อาคารต้นแก้ว', name: 'อาคารต้นแก้ว', icon: '🌳', desc: 'ศูนย์การแพทย์พิเศษ, อาคารพักฟื้น' },
+export const DEFAULT_HOSPITAL_BUILDINGS: BuildingInfo[] = [
+  { id: 'BLD-01', name: 'อาคารอำนวยการ', icon: '🏢', desc: 'งานบริหาร, ตรวจสุขภาพ, เวชระเบียน', totalFloors: 3, department: 'ฝ่ายบริหาร / สำนักงานผู้อำนวยการ', hasFireDoor: false, onlyFireExtinguisher: false },
+  { id: 'BLD-02', name: 'อาคารหมอบริกส์', icon: '🏥', desc: 'OPD, คลังยา, ศูนย์คอมพิวเตอร์ IT', totalFloors: 4, department: 'แผนกผู้ป่วยนอก (OPD) & เภสัชกรรม', hasFireDoor: true, onlyFireExtinguisher: false },
+  { id: 'BLD-03', name: 'อาคารหมอกัมพล', icon: '🏨', desc: 'IPD หอผู้ป่วย, ห้องผ่าตัด, ICU', totalFloors: 5, department: 'หอผู้ป่วยใน (IPD) & ศัลยกรรม/ICU', hasFireDoor: true, onlyFireExtinguisher: false },
+  { id: 'BLD-04', name: 'อาคารซักรีด-โภชนาการ', icon: '🧺', desc: 'ฝ่ายโภชนาการ, ซักฟอก, สโตร์กลาง', totalFloors: 2, department: 'ฝ่ายสนับสนุนบริการและโภชนาการ', hasFireDoor: false, onlyFireExtinguisher: false },
+  { id: 'BLD-05', name: 'อาคารกายภาพ-คลังยา', icon: '💊', desc: 'เวชศาสตร์ฟื้นฟู, กายภาพบำบัด, คลังยาหลัก', totalFloors: 3, department: 'เวชศาสตร์ฟื้นฟูและคลังพัสดุ', hasFireDoor: false, onlyFireExtinguisher: false },
+  { id: 'BLD-06', name: 'อาคารต้นแก้ว', icon: '🌳', desc: 'ศูนย์การแพทย์พิเศษ, อาคารพักฟื้น', totalFloors: 3, department: 'ศูนย์ความเป็นเลิศทางการแพทย์', hasFireDoor: false, onlyFireExtinguisher: false },
+  { id: 'BLD-07', name: 'ฝั่งหอพักพยาบาล', icon: '🏠', desc: 'หอพักพยาบาล, อาคารที่พักบุคลากรทางการแพทย์', totalFloors: 4, department: 'ฝ่ายบริหารงานที่พักและหอพักพยาบาล', hasFireDoor: false, onlyFireExtinguisher: true },
+  { id: 'BLD-08', name: 'รถตู้+รถตู้พยาบาล', icon: '🚐', desc: 'ยานพาหนะ, รถตู้ส่งต่อ, รถพยาบาลฉุกเฉิน EMS / Ambulance', totalFloors: 1, department: 'หน่วยยานพาหนะและบริการการแพทย์ฉุกเฉิน (EMS)', hasFireDoor: false, onlyFireExtinguisher: true },
 ];
 
-/** อาคารที่มีการติดตั้งประตูกันไฟ (มีเฉพาะอาคารหมอกัมพล และ อาคารหมอบริกส์) */
+export const HOSPITAL_BUILDINGS: BuildingInfo[] = DEFAULT_HOSPITAL_BUILDINGS;
+
+/** อาคารที่มีการติดตั้งประตูกันไฟ (มีเฉพาะอาคารหมอกัมพล และ อาคารหมอบริกส์ หรืออาคารที่ระบุ hasFireDoor) */
 export const BUILDINGS_WITH_FIRE_DOORS = ['อาคารหมอกัมพล', 'อาคารหมอบริกส์'];
 
-export function buildingSupportsFireDoor(buildingName: string): boolean {
+/** สถานที่/อาคารที่มีเฉพาะถังดับเพลิงเท่านั้น (เช่น หอพักพยาบาล, รถตู้และรถพยาบาล) */
+export const BUILDINGS_WITH_ONLY_FIRE_EXTINGUISHERS = [
+  'ฝั่งหอพักพยาบาล',
+  'รถตู้+รถตู้พยาบาล'
+];
+
+export function isBuildingOnlyFireExtinguisher(buildingName: string, customBuildings?: BuildingInfo[]): boolean {
   const b = (buildingName || '').trim();
+  if (!b || b === 'All') return false;
+  if (customBuildings && customBuildings.length > 0) {
+    const found = customBuildings.find(item => item.name === b || item.id === b);
+    if (found && found.onlyFireExtinguisher !== undefined) {
+      return Boolean(found.onlyFireExtinguisher);
+    }
+  }
+  return BUILDINGS_WITH_ONLY_FIRE_EXTINGUISHERS.some(onlyB => b.includes(onlyB) || onlyB.includes(b));
+}
+
+export function getAllowedAssetCategoriesForBuilding(buildingName: string, customBuildings?: BuildingInfo[]): AssetType[] {
+  if (isBuildingOnlyFireExtinguisher(buildingName, customBuildings)) {
+    return ['ถังดับเพลิง'];
+  }
+  if (buildingSupportsFireDoor(buildingName, customBuildings)) {
+    return ['ถังดับเพลิง', 'ตู้ดับเพลิง', 'ประตูกันไฟ', 'ตู้แจ้งเหตุเพลิงไหม้', 'ไฟฉุกเฉิน', 'ป้ายบอกทางหนีไฟ'];
+  }
+  return ['ถังดับเพลิง', 'ตู้ดับเพลิง', 'ตู้แจ้งเหตุเพลิงไหม้', 'ไฟฉุกเฉิน', 'ป้ายบอกทางหนีไฟ'];
+}
+
+export function buildingSupportsFireDoor(buildingName: string, customBuildings?: BuildingInfo[]): boolean {
+  const b = (buildingName || '').trim();
+  if (customBuildings && customBuildings.length > 0) {
+    const found = customBuildings.find(item => item.name === b || item.id === b);
+    if (found && found.hasFireDoor !== undefined) {
+      return Boolean(found.hasFireDoor);
+    }
+  }
   return BUILDINGS_WITH_FIRE_DOORS.some(validB => b.includes(validB) || validB.includes(b));
 }
 
@@ -115,7 +148,7 @@ export function isAssetInspectedInCurrentCycle(ext: FireExtinguisher): boolean {
   );
 }
 
-export function getBuildingEquipmentStats(extinguishers: FireExtinguisher[], buildingName: string) {
+export function getBuildingEquipmentStats(extinguishers: FireExtinguisher[], buildingName: string, customBuildings?: BuildingInfo[]) {
   const targetBuilding = (buildingName || '').trim();
   const buildingExts = extinguishers.filter(e => {
     if (!targetBuilding || targetBuilding === 'All') return true;
@@ -178,13 +211,10 @@ export function getBuildingEquipmentStats(extinguishers: FireExtinguisher[], bui
     }
   });
 
-  // Filter out Fire Door category if building does not support fire doors (and not 'All')
-  const allowedCategories = ASSET_CATEGORIES.map(c => c.id).filter(cat => {
-    if (cat === 'ประตูกันไฟ') {
-      return !targetBuilding || targetBuilding === 'All' || buildingSupportsFireDoor(targetBuilding);
-    }
-    return true;
-  });
+  // Filter allowed categories for this building
+  const allowedCategories = (!targetBuilding || targetBuilding === 'All')
+    ? ASSET_CATEGORIES.map(c => c.id)
+    : getAllowedAssetCategoriesForBuilding(targetBuilding, customBuildings);
 
   const categories = allowedCategories.map(cat => categoryBreakdownMap[cat]);
 

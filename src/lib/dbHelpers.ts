@@ -15,12 +15,14 @@ import {
 } from "firebase/firestore";
 import { db } from "./firebase";
 import { uploadExtinguisherProfilePhoto, uploadInspectionPhotosAndSignature } from "./storageHelpers";
-import { FireExtinguisher, InspectionLog, ExtinguisherType, UserProfile, SystemLog, AssetType } from "../types";
+import { FireExtinguisher, InspectionLog, ExtinguisherType, UserProfile, SystemLog, AssetType, BuildingInfo } from "../types";
+import { DEFAULT_HOSPITAL_BUILDINGS } from "./assetHelpers";
 
 const EXTINGUISHERS_COLLECTION = "fireExtinguishers";
 const INSPECTIONS_COLLECTION = "inspections";
 const USERS_COLLECTION = "users";
 const SYSTEM_LOGS_COLLECTION = "systemLogs";
+const BUILDINGS_COLLECTION = "hospitalBuildings";
 
 export enum OperationType {
   CREATE = 'create',
@@ -506,5 +508,144 @@ export async function updateUserRole(uid: string, newRole: 'Admin' | 'Inspector'
     await addSystemLog('UPDATE_USER_ROLE', `เปลี่ยนสิทธิ์ผู้ใช้งาน (UID: ${uid}) เป็น ${newRole}`, updatedByEmail);
   } catch (error) {
     handleFirestoreError(error, OperationType.UPDATE, `${USERS_COLLECTION}/${uid}`);
+  }
+}
+
+// -------------------------------------------------------------
+// Hospital Buildings Management (Firestore CRUD)
+// -------------------------------------------------------------
+
+// Fetch all hospital buildings from Firestore, or initialize with defaults if collection is empty
+export async function getHospitalBuildings(): Promise<BuildingInfo[]> {
+  try {
+    const buildingsRef = collection(db, BUILDINGS_COLLECTION);
+    const querySnapshot = await getDocs(buildingsRef);
+
+    if (querySnapshot.empty) {
+      // Seed default hospital buildings into Firestore
+      const seeded: BuildingInfo[] = [];
+      for (const bldg of DEFAULT_HOSPITAL_BUILDINGS) {
+        const docRef = doc(db, BUILDINGS_COLLECTION, bldg.id);
+        const bldgData = {
+          ...bldg,
+          updatedAt: new Date().toISOString(),
+        };
+        await setDoc(docRef, mapToFirestore(bldgData));
+        seeded.push(bldgData);
+      }
+      return seeded;
+    }
+
+    const buildings: BuildingInfo[] = [];
+    const existingNamesOrIds = new Set<string>();
+    querySnapshot.forEach((docSnap) => {
+      const data = docSnap.data();
+      const bldg = mapFromFirestore({ ...data, id: data.id || docSnap.id }) as BuildingInfo;
+      buildings.push(bldg);
+      if (bldg.id) existingNamesOrIds.add(bldg.id);
+      if (bldg.name) existingNamesOrIds.add(bldg.name);
+    });
+
+    // Check if any default hospital buildings are missing from Firestore and sync them
+    for (const defaultBldg of DEFAULT_HOSPITAL_BUILDINGS) {
+      if (!existingNamesOrIds.has(defaultBldg.id) && !existingNamesOrIds.has(defaultBldg.name)) {
+        try {
+          const docRef = doc(db, BUILDINGS_COLLECTION, defaultBldg.id);
+          const bldgData = {
+            ...defaultBldg,
+            updatedAt: new Date().toISOString(),
+          };
+          await setDoc(docRef, mapToFirestore(bldgData));
+          buildings.push(bldgData);
+        } catch (e) {
+          console.warn("Auto-sync default building warning:", e);
+        }
+      }
+    }
+
+    // Sort logically or alphabetically
+    return buildings.sort((a, b) => (a.id || '').localeCompare(b.id || '', undefined, { numeric: true }));
+  } catch (error) {
+    console.error("Error fetching hospital buildings, returning defaults:", error);
+    return DEFAULT_HOSPITAL_BUILDINGS;
+  }
+}
+
+// Save or update hospital building details (with support for cascading name updates on equipment)
+export async function saveHospitalBuilding(
+  building: BuildingInfo,
+  oldName?: string,
+  updatedByEmail: string = 'System'
+): Promise<BuildingInfo> {
+  try {
+    const bldgId = building.id || `BLD-${Date.now()}`;
+    const bldgRef = doc(db, BUILDINGS_COLLECTION, bldgId);
+
+    const bldgData: BuildingInfo = {
+      ...building,
+      id: bldgId,
+      name: building.name.trim(),
+      icon: building.icon.trim() || '🏢',
+      desc: building.desc?.trim() || '',
+      department: building.department?.trim() || '',
+      contactPerson: building.contactPerson?.trim() || '',
+      notes: building.notes?.trim() || '',
+      totalFloors: Number(building.totalFloors) || 1,
+      hasFireDoor: Boolean(building.hasFireDoor),
+      updatedAt: new Date().toISOString(),
+    };
+
+    await setDoc(bldgRef, mapToFirestore(bldgData), { merge: true });
+
+    // If building name was changed and oldName was provided, update all fire extinguishers located in this building
+    if (oldName && oldName.trim() !== bldgData.name) {
+      try {
+        const extsRef = collection(db, EXTINGUISHERS_COLLECTION);
+        const q = query(extsRef, where("building", "==", oldName.trim()));
+        const snapshot = await getDocs(q);
+        
+        const updatePromises: Promise<void>[] = [];
+        snapshot.forEach((docSnap) => {
+          updatePromises.push(
+            updateDoc(docSnap.ref, {
+              building: bldgData.name
+            })
+          );
+        });
+        await Promise.all(updatePromises);
+      } catch (cascadeError) {
+        console.warn("Cascade update of building name on equipment warning:", cascadeError);
+      }
+    }
+
+    await addSystemLog(
+      'UPDATE_BUILDING',
+      `แก้ไขข้อมูลอาคาร "${bldgData.name}" (${bldgData.desc || 'ไม่มีคำอธิบาย'})`,
+      updatedByEmail
+    );
+
+    return bldgData;
+  } catch (error) {
+    handleFirestoreError(error, OperationType.WRITE, `${BUILDINGS_COLLECTION}/${building.id}`);
+  }
+}
+
+// Delete a hospital building from Firestore
+export async function deleteHospitalBuilding(
+  buildingId: string,
+  buildingName: string,
+  deletedByEmail: string = 'System'
+): Promise<void> {
+  try {
+    const bldgRef = doc(db, BUILDINGS_COLLECTION, buildingId);
+    await deleteDoc(bldgRef);
+
+    await addSystemLog(
+      'DELETE_BUILDING',
+      `ลบข้อมูลอาคาร "${buildingName}" (ID: ${buildingId})`,
+      deletedByEmail
+    );
+  } catch (error) {
+    handleFirestoreError(error, OperationType.DELETE, `${BUILDINGS_COLLECTION}/${buildingId}`);
   }
 }
